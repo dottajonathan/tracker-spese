@@ -1,4 +1,4 @@
-# Tracker spese
+# Spiccioli
 
 PWA personale per registrare spese su Google Sheet tramite backend Apps Script.
 URL backend e token si inseriscono al primo avvio e restano sul dispositivo: nessun segreto nel repo.

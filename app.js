@@ -1,7 +1,7 @@
 /* Tracker spese - PWA v1.2 */
 'use strict';
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 const LS = { cfg: 'ts_cfg', cache: 'ts_cache', outbox: 'ts_outbox' };
 const TAG_PRESET = ['straordinaria', 'da rimborsare'];
 const DEFAULT_CONTO = 'Revolut Cointestato';
@@ -144,7 +144,7 @@ function render() {
   const v = $('#view');
   if (!getCfg()) { v.innerHTML = vistaSetup(); bindSetup(); $('#fab').classList.add('hidden'); return; }
   $('#fab').classList.remove('hidden');
-  $('#title').textContent = ({ home:'Tracker spese', movimenti:'Movimenti', grafici:'Grafici', mesi:'Confronto mesi' })[tab];
+  $('#title').textContent = ({ home:'Spiccioli', movimenti:'Movimenti', grafici:'Grafici', mesi:'Confronto mesi' })[tab];
   v.innerHTML = ({ home:vistaHome, movimenti:vistaMovimenti, grafici:vistaGrafici, mesi:vistaMesi })[tab]();
   bindVista();
 }
