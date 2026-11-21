@@ -1,7 +1,7 @@
 /* Tracker spese - PWA v1.2 */
 'use strict';
 
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.4.0';
 const LS = { cfg: 'ts_cfg', cache: 'ts_cache', outbox: 'ts_outbox' };
 const TAG_PRESET = ['straordinaria', 'da rimborsare'];
 const DEFAULT_CONTO = 'Revolut Cointestato';
@@ -356,72 +356,244 @@ function apriConto(nome) {
   };
 }
 
-/* ---------------- form movimento ---------------- */
+/* ---------------- form movimento a step ---------------- */
+// Regole "da dove pago" (report, sezione 6.1) per categoria/sottocategoria. '*' = tutte le sottocategorie.
+// conto: nome del conto atteso; personale: si paga dal conto personale (non tracciato qui).
+const REGOLE = [
+  ['Spesa','*',{conto:'Revolut Cointestato',why:'vita quotidiana'}],
+  ['Fuori casa','Pranzi lavoro',{personale:'di chi pranza',why:'i pranzi di lavoro si pagano dal conto personale (prima i buoni pasto)'}],
+  ['Fuori casa','*',{conto:'Revolut Cointestato',why:'vita quotidiana'}],
+  ['Abitazione','Articoli per la casa',{conto:'Revolut Cointestato',why:'piccoli acquisti ricorrenti: vita quotidiana'}],
+  ['Abitazione','Mobilio',{conto:'Casa & Respiro',why:'mobili e arredo'}],
+  ['Abitazione','Manutenzione ordinaria',{conto:'Manutenzione',why:'riparazioni e manutenzione di casa'}],
+  ['Abitazione','Manutenzione straordinaria',{conto:'Manutenzione',why:'guasti e riparazioni (se non basta: BBVA)'}],
+  ['Salute','Farmaci',{conto:'Revolut Cointestato',why:'farmacia: vita quotidiana'}],
+  ['Salute','*',{conto:'Casa & Respiro',why:'visite ed esami degli adulti (per le bimbe: Fondo Bimbe)'}],
+  ['Milù','Cibo gatti',{conto:'Revolut Cointestato',why:'vita quotidiana'}],
+  ['Milù','Veterinario',{conto:'Casa & Respiro',why:'veterinario oltre il vaccino (il vaccino annuale: vita quotidiana)'}],
+  ['Emilia','*',{conto:'Fondo Bimbe',why:'spese per le bimbe'}],
+  ['Famiglia','Giocattoli',{conto:'Fondo Bimbe',why:'spese per le bimbe'}],
+  ['Istruzione / Formazione','Mensa scolastica',{conto:'Scadenze',why:'la mensa si paga da Scadenze'}],
+  ['Istruzione / Formazione','Gres',{conto:'Scadenze',why:'il GRES si paga da Scadenze'}],
+  ['Istruzione / Formazione','*',{conto:'Fondo Bimbe',why:'scuola e attività delle bimbe'}],
+  ['Regali','*',{conto:'Vacanze e Regali',why:'regali e feste'}],
+  ['Vacanze e uscite','*',{conto:'Vacanze e Regali',why:'viaggi, alloggi e uscite in vacanza'}],
+  ['Trasporti','Manutenzione auto',{conto:'Manutenzione',why:'tagliando, revisione, gomme'}],
+  ['Trasporti','*',{personale:'di Sabri',why:'carburante, pedaggi, parcheggi e multe si pagano dal conto personale di Sabri'}],
+  ['Lavoro','Spese trasferta',{personale:'di Jonathan',why:'le trasferte si anticipano dal conto personale (rimborso in busta)'}],
+  ['Utenze','Tari',{conto:'Scadenze',why:'la TARI si paga da Scadenze'}],
+  ['Utenze','*',{conto:'MPS',why:'spese fisse in addebito su MPS'}],
+  ['Finanziamenti / Debiti','*',{conto:'MPS',why:'rate in addebito su MPS'}],
+  ['Polizze','*',{conto:'MPS',why:'Allianz in addebito su MPS da dicembre 2026'}],
+  ['Beneficenza','*',{conto:'MPS',why:'donazione in addebito su MPS'}],
+  ['Shopping e Svago','Abbonamenti',{conto:'Revolut Cointestato',why:'abbonamenti piccoli: vita quotidiana'}]
+];
+function regolaPer(cat, sub) {
+  const r = REGOLE.find(([c,s]) => c === cat && s === (sub||'')) || REGOLE.find(([c,s]) => c === cat && s === '*');
+  if (!r) return null;
+  const v = r[2];
+  if (v.conto && !contiAttivi().some(c => c.nome === v.conto)) return null;
+  return v;
+}
+const normNota = t => String(t||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9 ]+/g,' ').replace(/\s+/g,' ').trim();
+// indice delle note già usate: nota normalizzata -> categoria/sottocategoria/conto più frequenti
+function indiceNote(tipo) {
+  const idx = {};
+  for (const m of tuttiMov()) {
+    if (m.tipo !== tipo || !m.nota) continue;
+    const k = normNota(m.nota); if (!k) continue;
+    const e = idx[k] || (idx[k] = { nota: m.nota, n: 0, last: '', cats: {} });
+    e.n++; if (m.data > e.last) { e.last = m.data; e.nota = m.nota; }
+    const ck = m.categoria + '||' + (m.sottocategoria||'');
+    e.cats[ck] = (e.cats[ck]||0) + 1;
+  }
+  return idx;
+}
+function topCat(e) { const [k, n] = Object.entries(e.cats).sort((a,b) => b[1]-a[1])[0]; const [cat, sub] = k.split('||'); return { cat, sub, n, quota: n / e.n }; }
+function suggerisci(tipo, nota) {
+  const q = normNota(nota); if (!q) return { lista: [], cat: null };
+  const idx = indiceNote(tipo);
+  const voci = Object.entries(idx).map(([k, e]) => {
+    let score = 0;
+    if (k === q) score = 100; else if (k.startsWith(q)) score = 60; else if (k.includes(q)) score = 40;
+    else { const w = q.split(' ')[0]; if (w.length >= 3 && k.split(' ').includes(w)) score = 25; }
+    return { k, e, score: score ? score + Math.min(e.n, 20) : 0 };
+  }).filter(v => v.score).sort((a,b) => b.score - a.score || b.e.last.localeCompare(a.e.last));
+  const best = voci[0];
+  const cat = best && best.score >= 25 ? { ...topCat(best.e), da: best.e.nota, esatta: best.k === q } : null;
+  return { lista: voci.slice(0, 5), cat };
+}
+
 let F = null;
 function apriForm(m) {
-  F = m ? { ...m, importoTxt: String(Math.abs(m.importo)).replace('.',','), segnoRett: m.tipo==='rettifica' && m.importo<0 ? -1 : 1 }
-        : { tipo:'spesa', importoTxt:'', conto:DEFAULT_CONTO, conto_dest:'', categoria:'', sottocategoria:'', nota:'', tag:'', data:nowStr(), segnoRett:1 };
+  F = m ? { ...m, importoTxt: String(Math.abs(m.importo)).replace('.',','), segnoRett: m.tipo==='rettifica' && m.importo<0 ? -1 : 1, step: 'riepilogo', contoScelto: true, catScelta: true }
+        : { tipo:'spesa', importoTxt:'', conto:DEFAULT_CONTO, conto_dest:'', categoria:'', sottocategoria:'', nota:'', tag:'', data:nowStr(), segnoRett:1, step:'importo', contoScelto:false, catScelta:false };
   renderForm();
 }
+const passiPer = t => t === 'trasferimento' ? ['importo','conti','riepilogo'] : t === 'rettifica' ? ['importo','riepilogo'] : ['importo','nota','categoria','riepilogo'];
+function vai(step) { F.step = step; renderForm(); }
+function avanti() { const p = passiPer(F.tipo); const i = p.indexOf(F.step); if (i < p.length - 1) vai(p[i+1]); }
+function indietro() { const p = passiPer(F.tipo); const i = p.indexOf(F.step); if (i > 0) vai(p[i-1]); else chiudi(); }
+
+function testataStep(titolo) {
+  const p = passiPer(F.tipo), i = p.indexOf(F.step);
+  return `<div class="wz-top"><button class="icon-btn" id="wz-back" aria-label="Indietro">${svgIcon(i > 0 ? 'arrow_back' : 'close', 22)}</button>
+    <div class="wz-dots">${p.map((_,j) => `<span class="${j<=i?'on':''}"></span>`).join('')}</div><span style="width:40px"></span></div>
+    <h2 class="wz-h">${titolo}</h2>`;
+}
+function importoFmt() { const v = parseImporto(F.importoTxt); return isFinite(v) ? eur(F.tipo==='rettifica' ? v*F.segnoRett : v) : '—'; }
+
 function renderForm() {
+  const st = F.step;
   const tipi = [['spesa','Spesa'],['entrata','Entrata'],['trasferimento','Trasf.'],['rettifica','Rettifica']];
-  const conti = contiAttivi();
-  const usaCat = F.tipo === 'spesa' || F.tipo === 'entrata';
-  let catHtml = '';
-  if (usaCat) {
+  let html = '';
+  if (st === 'importo') {
+    html = testataStep(F.id ? 'Importo' : 'Quanto?') + `
+      <div class="seg" id="f-tipo">${tipi.map(([k,l])=>`<button data-t="${k}" class="${F.tipo===k?'on':''}">${l}</button>`).join('')}</div>
+      <div class="wz-amt">${F.tipo==='rettifica'?`<button class="chip" id="f-segno">${F.segnoRett<0?'−':'+'}</button>`:''}
+        <input id="f-imp" class="bigamt" inputmode="decimal" enterkeyhint="next" placeholder="0,00" value="${esc(F.importoTxt)}"><span class="wz-eur">€</span></div>
+      <div class="btns"><button class="btn" id="wz-next">Avanti</button></div>`;
+  } else if (st === 'nota') {
+    const sg = suggerisci(F.tipo, F.nota);
+    html = testataStep('Che cos\'è?') + `
+      <div class="wz-sub">${importoFmt()}</div>
+      <input id="f-nota" value="${esc(F.nota)}" placeholder="es. Esselunga, Farmacia, Pannolini" enterkeyhint="next" autocomplete="off">
+      <div id="sugg">${listaSugg(sg)}</div>
+      <div class="btns"><button class="btn" id="wz-next">${F.nota ? 'Avanti' : 'Salta'}</button></div>`;
+  } else if (st === 'categoria') {
     const freq = freqCategorie(F.tipo);
     const cats = [...new Set(S.categorie.filter(c => c.tipo === F.tipo).map(c => c.categoria))]
       .map(c => [c, Object.entries(freq).filter(([k]) => k.startsWith(c+'||')).reduce((a,[,v])=>a+v,0)])
       .sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0])).map(x => x[0]);
     const subs = F.categoria ? S.categorie.filter(c => c.tipo === F.tipo && c.categoria === F.categoria).map(c => String(c.sottocategoria||'')) : [];
-    catHtml = `<label>Categoria</label><div class="catgrid">${cats.map(c=>{ const d=catDef(c); return `<button data-cat="${esc(c)}" class="${F.categoria===c?'on':''}">${bolla(d[0], d[1], 46)}<span class="cg-l">${esc(c)}</span></button>`; }).join('')}</div>
-      ${subs.length > 1 || (subs.length===1 && subs[0]) ? `<label>Sottocategoria</label><div class="chips">${subs.map(s=>`<button class="chip ${String(F.sottocategoria||'')===s?'on':''}" data-sub="${esc(s)}">${s?esc(s):'(nessuna)'}</button>`).join('')}</div>` : ''}`;
+    const hasSubs = subs.length > 1 || (subs.length === 1 && subs[0]);
+    html = testataStep('Categoria') + `
+      <div class="wz-sub">${importoFmt()}${F.nota ? ' · ' + esc(F.nota) : ''}</div>
+      ${F.sugg && !F.catScelta ? `<div class="hint ok">${svgIcon('check',18)}<span>Suggerita da «${esc(F.sugg.da)}»: ${esc(F.sugg.cat)}${F.sugg.sub ? ' › ' + esc(F.sugg.sub) : ''}</span></div>` : ''}
+      <div class="catgrid">${cats.map(c=>{ const d=catDef(c); return `<button data-cat="${esc(c)}" class="${F.categoria===c?'on':''}">${bolla(d[0], d[1], 46)}<span class="cg-l">${esc(c)}</span></button>`; }).join('')}</div>
+      ${hasSubs ? `<label>Sottocategoria</label><div class="chips">${subs.map(x=>`<button class="chip ${String(F.sottocategoria||'')===x?'on':''}" data-sub="${esc(x)}">${x?esc(x):'(nessuna)'}</button>`).join('')}</div>` : ''}
+      <div class="btns"><button class="btn" id="wz-next" ${F.categoria?'':'disabled'}>Avanti</button></div>`;
+  } else if (st === 'conti') {
+    const conti = contiAttivi();
+    html = testataStep('Da dove a dove?') + `<div class="wz-sub">${importoFmt()}</div>
+      <label>Da</label><div class="chips">${conti.map(c=>`<button class="chip ${F.conto===c.nome?'on':''}" data-da="${esc(c.nome)}">${esc(c.nome)}</button>`).join('')}</div>
+      <label>A</label><div class="chips">${conti.map(c=>`<button class="chip ${F.conto_dest===c.nome?'on':''}" data-a="${esc(c.nome)}" ${F.conto===c.nome?'disabled':''}>${esc(c.nome)}</button>`).join('')}</div>
+      <div class="btns"><button class="btn" id="wz-next" ${F.conto_dest && F.conto_dest!==F.conto?'':'disabled'}>Avanti</button></div>`;
+  } else {
+    html = renderRiepilogo();
   }
-  const tags = (F.tag||'').split(',').map(t=>t.trim()).filter(Boolean);
-  sheet(`<div class="seg" id="f-tipo">${tipi.map(([k,l])=>`<button data-t="${k}" class="${F.tipo===k?'on':''}">${l}</button>`).join('')}</div>
-  <div class="row" style="justify-content:center;margin-top:10px">
-    ${F.tipo==='rettifica'?`<button class="chip" id="f-segno">${F.segnoRett<0?'−':'+'}</button>`:''}
-    <input id="f-imp" class="bigamt" inputmode="decimal" placeholder="0,00" value="${esc(F.importoTxt)}">
-  </div>
-  <label>${F.tipo==='trasferimento'?'Da conto':'Conto'}</label>
-  <select id="f-conto" class="pill-select">${conti.map(c=>`<option ${F.conto===c.nome?'selected':''}>${esc(c.nome)}</option>`).join('')}</select>
-  ${F.tipo==='trasferimento'?`<label>A conto</label><select id="f-dest"><option value="">—</option>${conti.map(c=>`<option ${F.conto_dest===c.nome?'selected':''}>${esc(c.nome)}</option>`).join('')}</select>`:''}
-  ${catHtml}
-  <label>Nota</label><input id="f-nota" value="${esc(F.nota)}" placeholder="es. Eurospin">
-  <label>Tag</label><div class="chips">${TAG_PRESET.map(t=>`<button class="chip ${tags.includes(t)?'on':''}" data-tag="${t}">${t}</button>`).join('')}</div>
-  <label>Data e ora</label><input id="f-data" type="datetime-local" step="1" value="${esc(F.data.replace(' ','T'))}">
-  <div class="btns">${F.id?'<button class="btn danger" id="f-del">Elimina</button>':'<button class="btn sec" id="f-annulla">Annulla</button>'}<button class="btn" id="f-ok">${F.id?'Salva':'Aggiungi'}</button></div>`);
+  sheet(html);
+  bindForm();
+}
 
-  const leggi = () => {
-    F.importoTxt = $('#f-imp').value; F.conto = $('#f-conto').value; F.nota = $('#f-nota').value;
-    const dv = $('#f-data').value; if (dv) F.data = (dv.length === 16 ? dv + ':00' : dv).replace('T',' ');
-    const d = $('#f-dest'); if (d) F.conto_dest = d.value;
-  };
-  document.querySelectorAll('#f-tipo button').forEach(b => b.onclick = () => { leggi(); if (F.tipo !== b.dataset.t) { F.tipo = b.dataset.t; F.categoria=''; F.sottocategoria=''; } renderForm(); });
-  document.querySelectorAll('.catgrid button').forEach(b => b.onclick = () => {
-    leggi(); F.categoria = b.dataset.cat;
-    const subs = S.categorie.filter(c => c.tipo === F.tipo && c.categoria === F.categoria).map(c => String(c.sottocategoria||''));
-    const freq = freqCategorie(F.tipo);
-    F.sottocategoria = subs.slice().sort((a,b) => (freq[F.categoria+'||'+b]||0) - (freq[F.categoria+'||'+a]||0))[0] || '';
-    renderForm();
-  });
-  document.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => { leggi(); F.sottocategoria = b.dataset.sub; renderForm(); });
-  document.querySelectorAll('[data-tag]').forEach(b => b.onclick = () => { leggi(); const t = new Set(tags); t.has(b.dataset.tag) ? t.delete(b.dataset.tag) : t.add(b.dataset.tag); F.tag = [...t].join(', '); renderForm(); });
-  const sg = $('#f-segno'); if (sg) sg.onclick = () => { leggi(); F.segnoRett *= -1; renderForm(); };
-  const an = $('#f-annulla'); if (an) an.onclick = chiudi;
-  const del = $('#f-del'); if (del) del.onclick = () => confermaElimina(F.id);
-  $('#f-ok').onclick = async () => {
-    leggi();
-    let imp = parseImporto(F.importoTxt);
-    if (!isFinite(imp) || imp <= 0) return toast('Importo non valido');
-    if (F.tipo === 'rettifica') imp *= F.segnoRett;
-    if ((F.tipo==='spesa'||F.tipo==='entrata') && !F.categoria) return toast('Scegli una categoria');
-    if (F.tipo==='trasferimento' && (!F.conto_dest || F.conto_dest===F.conto)) return toast('Conto destinazione non valido');
-    const mov = { id:F.id, tipo:F.tipo, importo:imp, conto:F.conto, conto_dest:F.tipo==='trasferimento'?F.conto_dest:'',
-      categoria:F.categoria||'', sottocategoria:F.sottocategoria||'', nota:F.nota.trim(), tag:F.tag||'', data:F.data };
-    await salva(mov);
-  };
-  if (!F.id) setTimeout(() => $('#f-imp')?.focus(), 50);
+function listaSugg(sg) {
+  if (!sg.lista.length) return '';
+  return `<div class="sugg-list">${sg.lista.map(v => { const t = topCat(v.e); const d = catDef(t.cat);
+    return `<button class="sugg" data-nota="${esc(v.e.nota)}">${bolla(d[0], d[1], 34)}<span class="bd"><span class="t1">${esc(v.e.nota)}</span><span class="t2">${esc(t.sub || t.cat)} · ${v.e.n} volt${v.e.n===1?'a':'e'}</span></span></button>`; }).join('')}</div>`;
+}
+
+function controlloConto() {
+  if (F.tipo !== 'spesa') return '';
+  const r = regolaPer(F.categoria, F.sottocategoria);
+  if (!r) return '';
+  if (r.personale) return `<div class="hint warn">${svgIcon('lightbulb',18)}<span>Di regola ${esc(r.why)}. Il conto personale non è tracciato qui: se l'hai pagata davvero da ${esc(F.conto)}, va bene così.</span></div>`;
+  if (r.conto === F.conto) return `<div class="hint ok">${svgIcon('check',18)}<span>Conto giusto: ${esc(r.why)}.</span></div>`;
+  return `<div class="hint warn">${svgIcon('lightbulb',18)}<span>Di regola si paga da <b>${esc(r.conto)}</b> (${esc(r.why)}).</span><button class="link" id="usa-conto" data-c="${esc(r.conto)}">Usa ${esc(r.conto)}</button></div>`;
+}
+
+function renderRiepilogo() {
+  const conti = contiAttivi();
+  const tags = (F.tag||'').split(',').map(t=>t.trim()).filter(Boolean);
+  const d = F.tipo==='trasferimento' ? TIPO_CAT.trasferimento : F.tipo==='rettifica' ? TIPO_CAT.rettifica : catDef(F.categoria);
+  const usaCat = F.tipo === 'spesa' || F.tipo === 'entrata';
+  const riga = (step, lab, val) => `<button class="sum-row" data-go="${step}"><span class="muted small">${lab}</span><span class="sum-v">${val}</span>${svgIcon('chevron_right',20)}</button>`;
+  return testataStep(F.id ? 'Modifica movimento' : 'Controlla e salva') + `
+    <div class="sum-head">${bolla(d[0], d[1], 52)}<div><div class="sum-amt ${F.tipo==='spesa'?'neg':F.tipo==='entrata'?'pos':''}">${importoFmt()}</div><div class="muted small">${({spesa:'Spesa',entrata:'Entrata',trasferimento:'Trasferimento',rettifica:'Rettifica'})[F.tipo]}</div></div></div>
+    <div class="card list sum">
+      ${riga('importo','Importo', importoFmt())}
+      ${F.tipo!=='rettifica' && F.tipo!=='trasferimento' ? riga('nota','Nota', esc(F.nota||'—')) : ''}
+      ${usaCat ? riga('categoria','Categoria', esc(F.categoria ? F.categoria + (F.sottocategoria ? ' › ' + F.sottocategoria : '') : 'da scegliere')) : ''}
+      ${F.tipo==='trasferimento' ? riga('conti','Conti', esc(F.conto + ' → ' + (F.conto_dest||'—'))) : ''}
+    </div>
+    ${F.tipo!=='trasferimento' ? `<label>Conto</label><div class="chips" id="f-conti">${contiReali().map(c=>`<button class="chip ${F.conto===c.nome?'on':''}" data-conto-sel="${esc(c.nome)}">${esc(c.nome)}</button>`).join('')}</div>${controlloConto()}` : ''}
+    ${F.tipo==='rettifica' || F.tipo==='trasferimento' ? `<label>Nota</label><input id="f-nota2" value="${esc(F.nota)}" placeholder="facoltativa">` : ''}
+    <label>Tag</label><div class="chips">${TAG_PRESET.map(t=>`<button class="chip ${tags.includes(t)?'on':''}" data-tag="${t}">${t}</button>`).join('')}</div>
+    <label>Data e ora</label><input id="f-data" type="datetime-local" step="1" value="${esc(F.data.replace(' ','T'))}">
+    <div class="btns">${F.id?'<button class="btn danger" id="f-del">Elimina</button>':''}<button class="btn" id="f-ok">${F.id?'Salva':'Aggiungi'}</button></div>`;
+}
+
+function scegliCategoria(cat, sub) {
+  F.categoria = cat;
+  const subs = S.categorie.filter(c => c.tipo === F.tipo && c.categoria === cat).map(c => String(c.sottocategoria||''));
+  if (sub !== undefined && subs.includes(sub)) F.sottocategoria = sub;
+  else { const freq = freqCategorie(F.tipo); F.sottocategoria = subs.slice().sort((a,b) => (freq[cat+'||'+b]||0) - (freq[cat+'||'+a]||0))[0] || ''; }
+  // conto proposto dalla regola, finché l'utente non l'ha scelto a mano
+  const r = regolaPer(F.categoria, F.sottocategoria);
+  if (!F.contoScelto && F.tipo === 'spesa') F.conto = r && r.conto ? r.conto : DEFAULT_CONTO;
+}
+
+function bindForm() {
+  const back = $('#wz-back'); if (back) back.onclick = indietro;
+  const next = $('#wz-next');
+  const leggiData = () => { const dv = $('#f-data')?.value; if (dv) F.data = (dv.length === 16 ? dv + ':00' : dv).replace('T',' '); };
+  if (F.step === 'importo') {
+    const inp = $('#f-imp');
+    const go = () => { F.importoTxt = inp.value; const v = parseImporto(F.importoTxt); if (!isFinite(v) || v <= 0) return toast('Importo non valido'); avanti(); };
+    next.onclick = go; inp.onkeydown = e => { if (e.key === 'Enter') go(); };
+    document.querySelectorAll('#f-tipo button').forEach(b => b.onclick = () => { F.importoTxt = inp.value; if (F.tipo !== b.dataset.t) { F.tipo = b.dataset.t; F.categoria=''; F.sottocategoria=''; F.catScelta=false; F.sugg=null; if (F.tipo==='trasferimento' && !F.conto_dest) F.conto = DEFAULT_CONTO; } renderForm(); });
+    const sg = $('#f-segno'); if (sg) sg.onclick = () => { F.importoTxt = inp.value; F.segnoRett *= -1; renderForm(); };
+    setTimeout(() => { inp.focus(); inp.select?.(); }, 60);
+  }
+  if (F.step === 'nota') {
+    const inp = $('#f-nota');
+    const conferma = () => {
+      F.nota = inp.value.trim();
+      const sg = suggerisci(F.tipo, F.nota);
+      if (sg.cat && !F.catScelta) { F.sugg = sg.cat; scegliCategoria(sg.cat.cat, sg.cat.sub); } else if (!sg.cat) F.sugg = null;
+      avanti();
+    };
+    inp.oninput = () => { F.nota = inp.value; $('#sugg').innerHTML = listaSugg(suggerisci(F.tipo, F.nota)); next.textContent = F.nota ? 'Avanti' : 'Salta'; bindSugg(); };
+    inp.onkeydown = e => { if (e.key === 'Enter') conferma(); };
+    next.onclick = conferma;
+    const bindSugg = () => document.querySelectorAll('.sugg').forEach(b => b.onclick = () => { inp.value = b.dataset.nota; conferma(); });
+    bindSugg();
+    setTimeout(() => inp.focus(), 60);
+  }
+  if (F.step === 'categoria') {
+    document.querySelectorAll('.catgrid button').forEach(b => b.onclick = () => {
+      F.catScelta = true; scegliCategoria(b.dataset.cat);
+      const subs = S.categorie.filter(c => c.tipo === F.tipo && c.categoria === F.categoria).map(c => String(c.sottocategoria||''));
+      if (subs.length > 1 || (subs.length === 1 && subs[0])) renderForm(); else avanti();
+    });
+    document.querySelectorAll('[data-sub]').forEach(b => b.onclick = () => { F.catScelta = true; scegliCategoria(F.categoria, b.dataset.sub); avanti(); });
+    next.onclick = () => { if (F.categoria) { F.catScelta = true; avanti(); } };
+  }
+  if (F.step === 'conti') {
+    document.querySelectorAll('[data-da]').forEach(b => b.onclick = () => { F.conto = b.dataset.da; if (F.conto_dest === F.conto) F.conto_dest = ''; renderForm(); });
+    document.querySelectorAll('[data-a]').forEach(b => b.onclick = () => { F.conto_dest = b.dataset.a; renderForm(); });
+    next.onclick = () => { if (F.conto_dest && F.conto_dest !== F.conto) avanti(); };
+  }
+  if (F.step === 'riepilogo') {
+    const leggiNota2 = () => { const n2 = $('#f-nota2'); if (n2) F.nota = n2.value; };
+    document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => { leggiData(); leggiNota2(); vai(b.dataset.go); });
+    document.querySelectorAll('[data-conto-sel]').forEach(b => b.onclick = () => { leggiData(); leggiNota2(); F.conto = b.dataset.contoSel; F.contoScelto = true; renderForm(); });
+    const uc = $('#usa-conto'); if (uc) uc.onclick = () => { leggiData(); leggiNota2(); F.conto = uc.dataset.c; F.contoScelto = true; renderForm(); };
+    const tags = (F.tag||'').split(',').map(t=>t.trim()).filter(Boolean);
+    document.querySelectorAll('[data-tag]').forEach(b => b.onclick = () => { leggiData(); leggiNota2(); const t = new Set(tags); t.has(b.dataset.tag) ? t.delete(b.dataset.tag) : t.add(b.dataset.tag); F.tag = [...t].join(', '); renderForm(); });
+    const del = $('#f-del'); if (del) del.onclick = () => confermaElimina(F.id);
+    $('#f-ok').onclick = async () => {
+      leggiData(); leggiNota2();
+      let imp = parseImporto(F.importoTxt);
+      if (!isFinite(imp) || imp <= 0) return toast('Importo non valido');
+      if (F.tipo === 'rettifica') imp *= F.segnoRett;
+      if ((F.tipo==='spesa'||F.tipo==='entrata') && !F.categoria) return vai('categoria');
+      if (F.tipo==='trasferimento' && (!F.conto_dest || F.conto_dest===F.conto)) return vai('conti');
+      const mov = { id:F.id, tipo:F.tipo, importo:imp, conto:F.conto, conto_dest:F.tipo==='trasferimento'?F.conto_dest:'',
+        categoria:(F.tipo==='spesa'||F.tipo==='entrata')?F.categoria:'', sottocategoria:(F.tipo==='spesa'||F.tipo==='entrata')?(F.sottocategoria||''):'',
+        nota:(F.nota||'').trim(), tag:F.tag||'', data:F.data };
+      await salva(mov);
+    };
+  }
 }
 
 async function salva(mov) {
