@@ -1,7 +1,7 @@
 /* Tracker spese - PWA v1.2 */
 'use strict';
 
-const APP_VERSION = '1.5.2';
+const APP_VERSION = '1.5.3';
 const LS = { cfg: 'ts_cfg', cache: 'ts_cache', outbox: 'ts_outbox' };
 const TAG_PRESET = ['straordinaria', 'da rimborsare'];
 const DEFAULT_CONTO = 'Revolut Cointestato';
@@ -229,7 +229,8 @@ function vistaHome() {
       <span class="acc-sub">${esc(c.tipo)}${c.banca?' · '+esc(c.banca):''}</span></button>`; }).join('')}
   </div>
   <div class="sec-h"><h2>Ultimi movimenti</h2><button class="link" id="vedi-tutti">Vedi tutti</button></div>
-  ${listaPerGiorno(recenti)}`;
+  ${listaPerGiorno(recenti)}
+  <p class="muted small" style="text-align:center;margin:18px 0 4px">Spiccioli v${APP_VERSION}</p>`;
 }
 
 function vistaMovimenti() {
@@ -847,4 +848,4 @@ try { const c = JSON.parse(localStorage.getItem(LS.cache)); if (c) S = c; } catc
 render();
 if (getCfg()) caricaDati();
 if (getCfg() && new URLSearchParams(location.search).get('nuovo') === '1') { history.replaceState(null, '', location.pathname); apriForm(null); }
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {});
