@@ -1,5 +1,5 @@
 // Service worker: cache dell'app shell, rete per il backend
-const CACHE = 'tracker-v1.0.0';
+const CACHE = 'tracker-v1.1.0';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {

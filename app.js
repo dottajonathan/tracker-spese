@@ -1,7 +1,7 @@
 /* Tracker spese - PWA v1.0 */
 'use strict';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const LS = { cfg: 'ts_cfg', cache: 'ts_cache', outbox: 'ts_outbox' };
 const TAG_PRESET = ['straordinaria', 'da rimborsare'];
 const DEFAULT_CONTO = 'Revolut Cointestato';
@@ -90,6 +90,8 @@ const contiReali = () => contiAttivi().filter(c => c.tipo !== 'esterno');
 function catInfo(cat, sub, tipo) {
   return S.categorie.find(c => c.categoria === cat && String(c.sottocategoria||'') === String(sub||'') && c.tipo === tipo);
 }
+const natura = m => { const c = catInfo(m.categoria, m.sottocategoria, 'spesa'); return (c && c.natura) || 'variabile'; };
+const passaNatura = m => !filtro.natura || natura(m) === filtro.natura;
 const isConsumo = m => { if (m.tipo !== 'spesa') return false; const c = catInfo(m.categoria, m.sottocategoria, 'spesa'); return c ? (c.consumo === true || c.consumo === 'TRUE') : true; };
 function tuttiMov() {
   const pend = getOutbox().map(o => ({ ...o.movimento, id:o.tempId, _pending:true }));
@@ -214,7 +216,7 @@ function vistaMovimenti() {
 function vistaGrafici() {
   const mesi = mesiDisponibili();
   const mese = filtro.gmese || mesi[0];
-  const spese = tuttiMov().filter(m => meseKey(m.data) === mese && isConsumo(m));
+  const spese = tuttiMov().filter(m => meseKey(m.data) === mese && isConsumo(m) && passaNatura(m));
   const perCat = {};
   spese.forEach(m => perCat[m.categoria] = (perCat[m.categoria]||0) + +m.importo);
   const arr = Object.entries(perCat).sort((a,b) => b[1]-a[1]);
@@ -226,18 +228,19 @@ function vistaGrafici() {
   const ultimi = mesi.slice(0,12).reverse();
   const trend = ultimi.map(k => {
     const ms = tuttiMov().filter(m => meseKey(m.data) === k);
-    return { k, spese: r2(ms.filter(isConsumo).reduce((a,m)=>a+ +m.importo,0)), entrate: r2(ms.filter(m=>m.tipo==='entrata').reduce((a,m)=>a+ +m.importo,0)) };
+    return { k, spese: r2(ms.filter(m => isConsumo(m) && passaNatura(m)).reduce((a,m)=>a+ +m.importo,0)), entrate: r2(ms.filter(m=>m.tipo==='entrata').reduce((a,m)=>a+ +m.importo,0)) };
   });
 
   return `<select id="g-mese" style="margin-bottom:10px">${mesi.map(k=>`<option value="${k}" ${k===mese?'selected':''}>${meseLabel(k)}</option>`).join('')}</select>
+  <div class="seg" id="g-nat" style="margin-bottom:10px">${[['','Tutte'],['fissa','Fisse'],['variabile','Variabili']].map(([k,l])=>`<button data-n="${k}" class="${(filtro.natura||'')===k?'on':''}">${l}</button>`).join('')}</div>
   ${warn}
-  <div class="card"><div class="muted">Spese di consumo · ${meseLabel(mese)}</div><div class="total">${eur(tot)}</div>
+  <div class="card"><div class="muted">Spese ${filtro.natura==='fissa'?'fisse':filtro.natura==='variabile'?'variabili':'di consumo'} · ${meseLabel(mese)}</div><div class="total">${eur(tot)}</div>
   <p class="muted" style="margin:4px 0 0">Esclusi trasferimenti, rettifiche e categorie "non consumo".</p></div>
   <div class="card"><h2>Per categoria</h2>
   ${arr.map(([c,v]) => `<div style="margin:10px 0" class="catrow" data-cat="${esc(c)}"><div class="row"><span>${EMOJI[c]||'•'} ${esc(c)}</span><span class="amt">${eur(v)} <span class="muted">${tot?Math.round(v/tot*100):0}%</span></span></div><div class="barwrap"><div class="bar" style="width:${(v/max*100).toFixed(1)}%"></div></div></div>`).join('') || '<p class="muted">Nessuna spesa</p>'}
   </div>
   <div class="card"><h2>Ultimi 12 mesi</h2>${svgTrend(trend)}
-  <p class="muted">Barre: spese di consumo · linea: entrate</p></div>`;
+  <p class="muted">Barre: spese ${filtro.natura==='fissa'?'fisse':filtro.natura==='variabile'?'variabili':'di consumo'} · linea: entrate</p></div>`;
 }
 
 function svgTrend(t) {
@@ -280,6 +283,7 @@ function bindVista() {
   }
   const gm = $('#g-mese');
   if (gm) gm.onchange = e => { filtro.gmese = e.target.value; render(); };
+  document.querySelectorAll('#g-nat button').forEach(b => b.onclick = () => { filtro.natura = b.dataset.n; render(); });
   document.querySelectorAll('.catrow').forEach(el => el.onclick = () => { filtro = { q: el.dataset.cat, conto:'', mese: filtro.gmese || mesiDisponibili()[0] }; tab='movimenti'; render(); });
 }
 
