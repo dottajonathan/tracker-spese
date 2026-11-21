@@ -1,19 +1,32 @@
-/* Tracker spese - PWA v1.0 */
+/* Tracker spese - PWA v1.2 */
 'use strict';
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const LS = { cfg: 'ts_cfg', cache: 'ts_cache', outbox: 'ts_outbox' };
 const TAG_PRESET = ['straordinaria', 'da rimborsare'];
 const DEFAULT_CONTO = 'Revolut Cointestato';
 
-const EMOJI = {
-  'Abitazione':'🏠','Beneficenza':'❤️','Conto personale':'👤','Cura personale':'💇','Emilia':'🍼',
-  'Entrate Straordinarie':'🎁','Famiglia':'👨‍👩‍👧','Finanziamenti / Debiti':'🏦','Fuori casa':'🍽️',
-  'Istruzione / Formazione':'🎓','Lavoro':'💼','Milù':'🐱','Polizze':'🛡️','Prestito':'🔁',
-  'Reddito':'💶','Regali':'🎀','Risparmio e Investimenti':'📈','Salute':'💊','Shopping e Svago':'🛍️',
-  'Spesa':'🛒','Trasporti':'🚗','Utenze':'💡','Vacanze e uscite':'🏖️'
+// icona Material Symbols + colore per categoria (colori presi dalle categorie Cashew)
+const CAT = {
+  'Abitazione':['home','#00897B'],'Beneficenza':['favorite','#EF5350'],'Conto personale':['person','#AB47BC'],
+  'Cura personale':['content_cut','#EC407A'],'Emilia':['child_care','#26C6DA'],'Entrate Straordinarie':['savings','#26A69A'],
+  'Famiglia':['family_restroom','#5C6BC0'],'Finanziamenti / Debiti':['account_balance','#78909C'],'Fuori casa':['restaurant','#FF7043'],
+  'Istruzione / Formazione':['school','#FBC02D'],'Lavoro':['work','#8D6E63'],'Milù':['pets','#A1887F'],'Polizze':['shield','#42A5F5'],
+  'Prestito':['swap_horiz','#7E57C2'],'Reddito':['payments','#9575CD'],'Regali':['redeem','#F44336'],
+  'Risparmio e Investimenti':['trending_up','#AB47BC'],'Salute':['medical_services','#FFA726'],'Shopping e Svago':['shopping_bag','#FF8A65'],
+  'Spesa':['shopping_cart','#66BB6A'],'Trasporti':['directions_car','#F9A825'],'Utenze':['bolt','#3F51B5'],'Vacanze e uscite':['beach_access','#2196F3']
 };
-const TIPO_IC = { trasferimento:'↔️', rettifica:'⚖️' };
+const TIPO_CAT = { trasferimento:['swap_horiz','#64748B'], rettifica:['tune','#64748B'] };
+const CONTO_COL = ['#4F7DF3','#2BA88A','#E0A100','#E2574C','#8E6CEF','#E86AA6','#14A3C7','#64748B'];
+function svgIcon(name, size=22) {
+  const d = ICONS[name] || ICONS.category; if (!d) return '';
+  return `<svg class="mi" width="${size}" height="${size}" viewBox="${d[0]}" aria-hidden="true">${d[1].map(p=>`<path d="${p}"/>`).join('')}</svg>`;
+}
+const catDef = c => CAT[c] || ['category','#90A4AE'];
+function bolla(icon, color, size=40) {
+  return `<span class="bolla" style="--c:${color};width:${size}px;height:${size}px">${svgIcon(icon, Math.round(size*0.55))}</span>`;
+}
+const contoColor = nome => { const i = contiAttivi().findIndex(c => c.nome === nome); return CONTO_COL[(i < 0 ? 7 : i) % CONTO_COL.length]; };
 
 let S = { conti:[], categorie:[], movimenti:[], config:[] };
 let tab = 'home';
@@ -131,6 +144,7 @@ function render() {
   const v = $('#view');
   if (!getCfg()) { v.innerHTML = vistaSetup(); bindSetup(); $('#fab').classList.add('hidden'); return; }
   $('#fab').classList.remove('hidden');
+  $('#title').textContent = ({ home:'Tracker spese', movimenti:'Movimenti', grafici:'Grafici', mesi:'Confronto mesi' })[tab];
   v.innerHTML = ({ home:vistaHome, movimenti:vistaMovimenti, grafici:vistaGrafici, mesi:vistaMesi })[tab]();
   bindVista();
 }
@@ -154,41 +168,64 @@ function bindSetup() {
 }
 
 function rigaMov(m) {
-  let ic, t1, t2, cls, segno;
-  if (m.tipo === 'trasferimento') { ic = TIPO_IC.trasferimento; t1 = `${m.conto} → ${m.conto_dest}`; cls=''; segno=''; }
-  else if (m.tipo === 'rettifica') { ic = TIPO_IC.rettifica; t1 = 'Rettifica · ' + m.conto; cls = m.importo<0?'neg':'pos'; segno=''; }
-  else { ic = EMOJI[m.categoria] || '•'; t1 = m.sottocategoria || m.categoria; cls = m.tipo==='spesa'?'neg':'pos'; segno = m.tipo==='spesa'?'-':''; }
-  t2 = [m.nota, m.tipo!=='trasferimento' && m.tipo!=='rettifica' ? m.conto : '', m.tag].filter(Boolean).join(' · ');
-  const imp = m.tipo==='spesa' ? -m.importo : +m.importo;
+  let def, t1, cls;
+  if (m.tipo === 'trasferimento') { def = TIPO_CAT.trasferimento; t1 = `${m.conto} → ${m.conto_dest}`; cls = 'neutral'; }
+  else if (m.tipo === 'rettifica') { def = TIPO_CAT.rettifica; t1 = 'Rettifica'; cls = m.importo < 0 ? 'neg' : 'pos'; }
+  else { def = catDef(m.categoria); t1 = m.nota || m.sottocategoria || m.categoria; cls = m.tipo === 'spesa' ? 'neg' : 'pos'; }
+  const sub = m.tipo === 'trasferimento' ? (m.nota || 'Trasferimento')
+    : m.tipo === 'rettifica' ? [m.conto, m.nota].filter(Boolean).join(' · ')
+    : [m.nota ? (m.sottocategoria || m.categoria) : (m.sottocategoria ? m.categoria : ''), m.conto].filter(Boolean).join(' · ');
+  const imp = m.tipo === 'spesa' ? -m.importo : +m.importo;
+  const txt = m.tipo === 'trasferimento' ? eur(+m.importo) : (imp > 0 ? '+' : '') + eur(imp);
+  const tag = m.tag ? `<span class="pill">${esc(m.tag)}</span>` : '';
   return `<div class="mov ${m._pending?'pending':''}" data-id="${esc(m.id)}">
-    <div class="ic">${ic}</div>
-    <div class="bd"><div class="t1">${esc(t1)}</div><div class="t2">${esc(t2)||'&nbsp;'}</div></div>
-    <div class="amt ${cls}">${m.tipo==='trasferimento'?eur(+m.importo).replace('−',''):eur(imp)}</div></div>`;
+    ${bolla(def[0], def[1], 42)}
+    <div class="bd"><div class="t1">${esc(t1)}</div><div class="t2">${esc(sub)}${tag}</div></div>
+    <div class="amt ${cls}">${txt}</div></div>`;
 }
 function listaPerGiorno(movs) {
-  let html = '', giorno = '';
+  const gruppi = [];
   for (const m of movs) {
     const g = m.data.slice(0,10);
-    if (g !== giorno) {
-      if (giorno) html += '</div>';
-      giorno = g;
-      html += `<div class="day">${parseD(g+' 00:00:00').toLocaleDateString('it-IT',{weekday:'long',day:'numeric',month:'long'})}</div><div class="card" style="padding:0 14px">`;
-    }
-    html += rigaMov(m);
+    if (!gruppi.length || gruppi[gruppi.length-1].g !== g) gruppi.push({ g, items: [] });
+    gruppi[gruppi.length-1].items.push(m);
   }
-  return html + (giorno ? '</div>' : '');
+  const oggi = nowStr().slice(0,10), ieri = nowStr(new Date(Date.now()-864e5)).slice(0,10);
+  return gruppi.map(({ g, items }) => {
+    const lab = g === oggi ? 'Oggi' : g === ieri ? 'Ieri' : parseD(g+' 00:00:00').toLocaleDateString('it-IT',{weekday:'long',day:'numeric',month:'long'});
+    const net = r2(items.reduce((a,m) => a + (m.tipo==='spesa' ? -m.importo : m.tipo==='entrata' ? +m.importo : 0), 0));
+    return `<div class="day"><span>${lab}</span>${net ? `<span class="${net<0?'neg':'pos'}">${net>0?'+':''}${eur(net)}</span>` : ''}</div>
+      <div class="card list">${items.map(rigaMov).join('')}</div>`;
+  }).join('');
 }
 
 function vistaHome() {
   const s = saldi();
   const reali = contiReali();
   const tot = r2(reali.filter(c => c.nel_totale === true || c.nel_totale === 'TRUE').reduce((a,c) => a + s[c.nome], 0));
-  const recenti = tuttiMov().slice().sort((a,b) => b.data.localeCompare(a.data)).slice(0, 8);
-  return `<div class="card"><div class="muted">Totale tracciato</div><div class="total">${eur(tot)}</div></div>
-  <div class="card"><h2>Conti e Pocket</h2>
-  ${reali.map(c => `<div class="acc row" data-conto="${esc(c.nome)}"><div><div>${esc(c.nome)}</div><div class="muted">${esc(c.tipo)}${c.banca?' · '+esc(c.banca):''}</div></div><div class="amt ${s[c.nome]<0?'neg':''}">${eur(s[c.nome])}</div></div>`).join('')}
+  const mk = nowStr().slice(0,7);
+  const delMese = tuttiMov().filter(m => meseKey(m.data) === mk);
+  const usc = r2(delMese.filter(isConsumo).reduce((a,m) => a + +m.importo, 0));
+  const ent = r2(delMese.filter(m => m.tipo === 'entrata').reduce((a,m) => a + +m.importo, 0));
+  const recenti = tuttiMov().slice().sort((a,b) => b.data.localeCompare(a.data)).slice(0, 10);
+  const meseNome = new Date().toLocaleDateString('it-IT',{month:'long'});
+  return `<section class="hero">
+    <div class="hero-lab">Totale disponibile</div>
+    <div class="hero-tot">${eur(tot)}</div>
+    <div class="hero-row">
+      <div class="hero-chip"><span class="dot pos">${svgIcon('arrow_downward',16)}</span><div><div class="hc-lab">Entrate di ${meseNome}</div><div class="hc-val">${eur(ent)}</div></div></div>
+      <div class="hero-chip"><span class="dot neg">${svgIcon('arrow_upward',16)}</span><div><div class="hc-lab">Spese di ${meseNome}</div><div class="hc-val">${eur(usc)}</div></div></div>
+    </div>
+  </section>
+  <div class="sec-h"><h2>Conti e Pocket</h2></div>
+  <div class="accs">
+  ${reali.map(c => { const col = contoColor(c.nome); return `<button class="acc-card" data-conto="${esc(c.nome)}" style="--c:${col}">
+      <span class="acc-ic">${svgIcon(c.tipo==='pocket'?'savings':c.tipo==='deposito'?'account_balance':'account_balance_wallet',20)}</span>
+      <span class="acc-name">${esc(c.nome)}</span>
+      <span class="acc-bal ${s[c.nome]<0?'neg':''}">${eur(s[c.nome])}</span>
+      <span class="acc-sub">${esc(c.tipo)}${c.banca?' · '+esc(c.banca):''}</span></button>`; }).join('')}
   </div>
-  <h2 style="margin:16px 4px 6px">Ultimi movimenti</h2>
+  <div class="sec-h"><h2>Ultimi movimenti</h2><button class="link" id="vedi-tutti">Vedi tutti</button></div>
   ${listaPerGiorno(recenti)}`;
 }
 
@@ -203,12 +240,12 @@ function vistaMovimenti() {
     movs = movs.filter(m => [m.nota,m.categoria,m.sottocategoria,m.tag,m.conto,m.conto_dest].join(' ').toLowerCase().includes(q) || (isFinite(qn) && Math.abs(+m.importo - qn) < 0.005));
   }
   const tot = r2(movs.reduce((a,m) => a + (m.tipo==='spesa' ? -m.importo : m.tipo==='entrata' ? +m.importo : 0), 0));
-  return `<input id="f-q" type="search" placeholder="Cerca nota, categoria, importo…" value="${esc(filtro.q)}">
-  <div class="filters" style="margin-top:8px">
-    <select id="f-conto"><option value="">Tutti i conti</option>${contiAttivi().map(c=>`<option ${filtro.conto===c.nome?'selected':''}>${esc(c.nome)}</option>`).join('')}</select>
-    <select id="f-mese"><option value="">Tutti i mesi</option>${mesi.map(k=>`<option value="${k}" ${filtro.mese===k?'selected':''}>${meseLabel(k)}</option>`).join('')}</select>
+  return `<div class="search">${svgIcon('search',20)}<input id="f-q" type="search" placeholder="Cerca nota, categoria, importo…" value="${esc(filtro.q)}"></div>
+  <div class="filters">
+    <select id="f-conto" class="pill-select"><option value="">Tutti i conti</option>${contiAttivi().map(c=>`<option ${filtro.conto===c.nome?'selected':''}>${esc(c.nome)}</option>`).join('')}</select>
+    <select id="f-mese" class="pill-select"><option value="">Tutti i mesi</option>${mesi.map(k=>`<option value="${k}" ${filtro.mese===k?'selected':''}>${meseLabel(k)}</option>`).join('')}</select>
   </div>
-  <div class="muted" style="margin:0 4px">${movs.length} movimenti · saldo entrate−spese ${eur(tot)}</div>
+  <div class="muted small" style="margin:2px 6px 0">${movs.length} movimenti · entrate − spese ${eur(tot)}</div>
   ${listaPerGiorno(movs.slice(0, 300))}
   ${movs.length > 300 ? '<p class="muted" style="text-align:center">Mostrati i primi 300: restringi i filtri</p>' : ''}`;
 }
@@ -223,24 +260,38 @@ function vistaGrafici() {
   const tot = r2(arr.reduce((a,x) => a+x[1], 0));
   const max = arr.length ? arr[0][1] : 1;
   const warn = mese < affidabileDa().slice(0,7) ? `<div class="warnbox">Mese anteriore a ${affidabileDa()}: dati non affidabili.</div>` : '';
-
-  // trend 12 mesi
   const ultimi = mesi.slice(0,12).reverse();
   const trend = ultimi.map(k => {
     const ms = tuttiMov().filter(m => meseKey(m.data) === k);
     return { k, spese: r2(ms.filter(m => isConsumo(m) && passaNatura(m)).reduce((a,m)=>a+ +m.importo,0)), entrate: r2(ms.filter(m=>m.tipo==='entrata').reduce((a,m)=>a+ +m.importo,0)) };
   });
-
-  return `<select id="g-mese" style="margin-bottom:10px">${mesi.map(k=>`<option value="${k}" ${k===mese?'selected':''}>${meseLabel(k)}</option>`).join('')}</select>
-  <div class="seg" id="g-nat" style="margin-bottom:10px">${[['','Tutte'],['fissa','Fisse'],['variabile','Variabili']].map(([k,l])=>`<button data-n="${k}" class="${(filtro.natura||'')===k?'on':''}">${l}</button>`).join('')}</div>
-  ${warn}
-  <div class="card"><div class="muted">Spese ${filtro.natura==='fissa'?'fisse':filtro.natura==='variabile'?'variabili':'di consumo'} · ${meseLabel(mese)}</div><div class="total">${eur(tot)}</div>
-  <p class="muted" style="margin:4px 0 0">Esclusi trasferimenti, rettifiche e categorie "non consumo".</p></div>
-  <div class="card"><h2>Per categoria</h2>
-  ${arr.map(([c,v]) => `<div style="margin:10px 0" class="catrow" data-cat="${esc(c)}"><div class="row"><span>${EMOJI[c]||'•'} ${esc(c)}</span><span class="amt">${eur(v)} <span class="muted">${tot?Math.round(v/tot*100):0}%</span></span></div><div class="barwrap"><div class="bar" style="width:${(v/max*100).toFixed(1)}%"></div></div></div>`).join('') || '<p class="muted">Nessuna spesa</p>'}
+  const lab = filtro.natura==='fissa'?'fisse':filtro.natura==='variabile'?'variabili':'di consumo';
+  return `<div class="toolbar">
+    <select id="g-mese" class="pill-select">${mesi.map(k=>`<option value="${k}" ${k===mese?'selected':''}>${meseLabel(k)}</option>`).join('')}</select>
+    <div class="seg" id="g-nat">${[['','Tutte'],['fissa','Fisse'],['variabile','Variabili']].map(([k,l])=>`<button data-n="${k}" class="${(filtro.natura||'')===k?'on':''}">${l}</button>`).join('')}</div>
   </div>
-  <div class="card"><h2>Ultimi 12 mesi</h2>${svgTrend(trend)}
-  <p class="muted">Barre: spese ${filtro.natura==='fissa'?'fisse':filtro.natura==='variabile'?'variabili':'di consumo'} · linea: entrate</p></div>`;
+  ${warn}
+  <div class="card donut-card">
+    ${donut(arr, tot, `Spese ${lab}`)}
+  </div>
+  <div class="card list">
+  ${arr.map(([c,v]) => { const d = catDef(c); return `<div class="catrow" data-cat="${esc(c)}">${bolla(d[0], d[1], 40)}
+      <div class="bd"><div class="row"><span class="t1">${esc(c)}</span><span class="amt">${eur(v)}</span></div>
+      <div class="row small"><div class="barwrap"><div class="bar" style="width:${(v/max*100).toFixed(1)}%;background:${d[1]}"></div></div><span class="muted pct">${tot?Math.round(v/tot*100):0}%</span></div></div></div>`; }).join('') || '<p class="muted" style="padding:12px 4px">Nessuna spesa</p>'}
+  </div>
+  <div class="sec-h"><h2>Ultimi 12 mesi</h2></div>
+  <div class="card">${svgTrend(trend)}
+  <p class="muted small">Barre: spese ${lab} · linea: entrate</p></div>`;
+}
+
+function donut(arr, tot, label) {
+  const R = 74, C = 2 * Math.PI * R; let off = 0;
+  const segs = tot ? arr.map(([c,v]) => { const len = v / tot * C; const gap = arr.length > 1 ? Math.min(3, len/3) : 0;
+    const el = `<circle r="${R}" cx="90" cy="90" fill="none" stroke="${catDef(c)[1]}" stroke-width="18" stroke-linecap="butt"
+      stroke-dasharray="${Math.max(len-gap,0.01)} ${C}" stroke-dashoffset="${-off}" transform="rotate(-90 90 90)"/>`; off += len; return el; }).join('')
+    : `<circle r="${R}" cx="90" cy="90" fill="none" stroke="var(--line)" stroke-width="18"/>`;
+  return `<div class="donut"><svg viewBox="0 0 180 180" width="200" height="200" role="img" aria-label="${esc(label)}">${segs}</svg>
+    <div class="donut-c"><div class="muted small">${esc(label)}</div><div class="donut-v">${eur(tot)}</div></div></div>`;
 }
 
 function svgTrend(t) {
@@ -248,7 +299,7 @@ function svgTrend(t) {
   const W = 600, H = 200, pl = 8, pb = 22, n = t.length, bw = (W - pl*2) / n;
   const max = Math.max(1, ...t.map(x => Math.max(x.spese, x.entrate)));
   const y = v => H - pb - (v / max) * (H - pb - 10);
-  const bars = t.map((x,i) => `<rect x="${pl+i*bw+bw*0.2}" y="${y(x.spese)}" width="${bw*0.6}" height="${H-pb-y(x.spese)}" rx="3" fill="var(--accent-2)"><title>${meseLabel(x.k)}: ${eur(x.spese)}</title></rect>
+  const bars = t.map((x,i) => `<rect x="${pl+i*bw+bw*0.2}" y="${y(x.spese)}" width="${bw*0.6}" height="${H-pb-y(x.spese)}" rx="3" fill="var(--accent)" opacity="0.85"><title>${meseLabel(x.k)}: ${eur(x.spese)}</title></rect>
     <text x="${pl+i*bw+bw/2}" y="${H-6}" text-anchor="middle">${meseLabel(x.k).split(' ')[0]}</text>`).join('');
   const pts = t.map((x,i) => `${pl+i*bw+bw/2},${y(x.entrate)}`).join(' ');
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Trend mensile">${bars}<polyline points="${pts}" fill="none" stroke="var(--pos)" stroke-width="2.5"/></svg>`;
@@ -274,7 +325,8 @@ function bindVista() {
     if (m && m._pending) return toast('Movimento in coda: modificabile dopo la sincronizzazione');
     if (m) apriForm(m);
   });
-  document.querySelectorAll('.acc[data-conto]').forEach(el => el.onclick = () => apriConto(el.dataset.conto));
+  document.querySelectorAll('[data-conto]').forEach(el => el.onclick = () => apriConto(el.dataset.conto));
+  const vt = $('#vedi-tutti'); if (vt) vt.onclick = () => { tab = 'movimenti'; render(); window.scrollTo(0,0); };
   const fq = $('#f-q');
   if (fq) {
     fq.oninput = () => { filtro.q = fq.value; const pos = fq.selectionStart; render(); const n=$('#f-q'); n.focus(); n.setSelectionRange(pos,pos); };
@@ -322,7 +374,7 @@ function renderForm() {
       .map(c => [c, Object.entries(freq).filter(([k]) => k.startsWith(c+'||')).reduce((a,[,v])=>a+v,0)])
       .sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0])).map(x => x[0]);
     const subs = F.categoria ? S.categorie.filter(c => c.tipo === F.tipo && c.categoria === F.categoria).map(c => String(c.sottocategoria||'')) : [];
-    catHtml = `<label>Categoria</label><div class="catgrid">${cats.map(c=>`<button data-cat="${esc(c)}" class="${F.categoria===c?'on':''}"><span>${EMOJI[c]||'•'}</span>${esc(c)}</button>`).join('')}</div>
+    catHtml = `<label>Categoria</label><div class="catgrid">${cats.map(c=>{ const d=catDef(c); return `<button data-cat="${esc(c)}" class="${F.categoria===c?'on':''}">${bolla(d[0], d[1], 46)}<span class="cg-l">${esc(c)}</span></button>`; }).join('')}</div>
       ${subs.length > 1 || (subs.length===1 && subs[0]) ? `<label>Sottocategoria</label><div class="chips">${subs.map(s=>`<button class="chip ${String(F.sottocategoria||'')===s?'on':''}" data-sub="${esc(s)}">${s?esc(s):'(nessuna)'}</button>`).join('')}</div>` : ''}`;
   }
   const tags = (F.tag||'').split(',').map(t=>t.trim()).filter(Boolean);
@@ -332,7 +384,7 @@ function renderForm() {
     <input id="f-imp" class="bigamt" inputmode="decimal" placeholder="0,00" value="${esc(F.importoTxt)}">
   </div>
   <label>${F.tipo==='trasferimento'?'Da conto':'Conto'}</label>
-  <select id="f-conto">${conti.map(c=>`<option ${F.conto===c.nome?'selected':''}>${esc(c.nome)}</option>`).join('')}</select>
+  <select id="f-conto" class="pill-select">${conti.map(c=>`<option ${F.conto===c.nome?'selected':''}>${esc(c.nome)}</option>`).join('')}</select>
   ${F.tipo==='trasferimento'?`<label>A conto</label><select id="f-dest"><option value="">—</option>${conti.map(c=>`<option ${F.conto_dest===c.nome?'selected':''}>${esc(c.nome)}</option>`).join('')}</select>`:''}
   ${catHtml}
   <label>Nota</label><input id="f-nota" value="${esc(F.nota)}" placeholder="es. Eurospin">
@@ -411,6 +463,8 @@ function chiudi() { $('#sheet').classList.add('hidden'); F = null; }
 /* ---------------- avvio ---------------- */
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => { tab = b.dataset.tab; render(); window.scrollTo(0,0); });
 $('#fab').onclick = () => apriForm(null);
+$('#fab').innerHTML = svgIcon('add', 30);
+document.querySelectorAll('.ni').forEach(n => n.innerHTML = svgIcon(n.dataset.i, 24));
 $('#sheet').addEventListener('click', e => { if (e.target.id === 'sheet') chiudi(); });
 window.addEventListener('online', () => caricaDati());
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && getCfg()) caricaDati(); });
