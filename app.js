@@ -1,7 +1,7 @@
 /* Tracker spese - PWA v1.2 */
 'use strict';
 
-const APP_VERSION = '1.5.3';
+const APP_VERSION = '1.6.0';
 const LS = { cfg: 'ts_cfg', cache: 'ts_cache', outbox: 'ts_outbox' };
 const TAG_PRESET = ['straordinaria', 'da rimborsare'];
 const DEFAULT_CONTO = 'Revolut Cointestato';
@@ -544,6 +544,38 @@ function apriSettimana() {
   bindVista();
 }
 
+/* ---------------- impostazioni ---------------- */
+const TEMI = [['auto','Automatico','brightness_auto','linear-gradient(135deg,#F6F7FB 50%,#0F1115 50%)'],['light','Chiaro','light_mode','#F6F7FB'],
+  ['dim','Medio','contrast','#2F3540'],['dark','Scuro','dark_mode','#0F1115']];
+const temaAttuale = () => { try { return localStorage.getItem('ts_theme') || 'auto'; } catch { return 'auto'; } };
+function applicaTema(t) {
+  const root = document.documentElement;
+  if (t === 'auto') root.removeAttribute('data-theme'); else root.setAttribute('data-theme', t);
+  // colore della barra di stato: con il tema forzato vale una sola meta, senza media query
+  document.querySelectorAll('meta[name="theme-color"]').forEach(m => m.remove());
+  const col = { light:'#F6F7FB', dim:'#252A33', dark:'#0F1115' };
+  const add = (c, media) => { const m = document.createElement('meta'); m.name = 'theme-color'; m.content = c; if (media) m.media = media; document.head.appendChild(m); };
+  if (t === 'auto') { add(col.light, '(prefers-color-scheme: light)'); add(col.dark, '(prefers-color-scheme: dark)'); } else add(col[t]);
+}
+function apriImpostazioni() {
+  const t = temaAttuale(), cfg = getCfg();
+  sheet(`<h2 class="wz-h">Impostazioni</h2>
+    <div class="set-sec">Tema</div>
+    <div class="themes">${TEMI.map(([k,l,ic,bg]) => `<button data-th="${k}" class="${t===k?'on':''}"><span class="sw" style="background:${bg};color:${k==='light'?'#1B1D24':'#E7E9EF'}">${k==='auto'?'':svgIcon(ic,18)}</span>${l}</button>`).join('')}</div>
+    <p class="muted small" style="margin:8px 2px 0">Automatico segue il tema chiaro/scuro del telefono.</p>
+    <div class="set-sec">App</div>
+    <div class="card list">
+      <div class="set-row"><span>Versione</span><span class="muted">${APP_VERSION}</span></div>
+      <div class="set-row"><span>Collegamento</span><span class="muted">${cfg ? 'configurato' : 'non configurato'}</span></div>
+      <button class="set-row" id="set-sync" ><span>Ricarica i dati dal foglio</span>${svgIcon('sync',20)}</button>
+    </div>`);
+  document.querySelectorAll('[data-th]').forEach(b => b.onclick = () => {
+    try { localStorage.setItem('ts_theme', b.dataset.th); } catch {}
+    applicaTema(b.dataset.th); document.querySelectorAll('[data-th]').forEach(x => x.classList.toggle('on', x === b));
+  });
+  $('#set-sync').onclick = () => { chiudi(); caricaDati(); toast('Aggiornamento…'); };
+}
+
 // doppioni: stesso tipo, importo, giorno e categoria (o stessi conti per i trasferimenti)
 function possibileDoppione(mov) {
   return tuttiMov().find(m => m.id !== mov.id && m.tipo === mov.tipo && Math.abs(+m.importo - mov.importo) < 0.005 && m.data.slice(0,10) === mov.data.slice(0,10)
@@ -846,6 +878,8 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 
 try { const c = JSON.parse(localStorage.getItem(LS.cache)); if (c) S = c; } catch {}
 render();
+applicaTema(temaAttuale());
+$('#btn-set').innerHTML = svgIcon('settings', 22); $('#btn-set').onclick = apriImpostazioni;
 if (getCfg()) caricaDati();
 if (getCfg() && new URLSearchParams(location.search).get('nuovo') === '1') { history.replaceState(null, '', location.pathname); apriForm(null); }
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {});

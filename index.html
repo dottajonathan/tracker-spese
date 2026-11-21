@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#F6F7FB" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0F1115" media="(prefers-color-scheme: dark)">
+<script>/* applica il tema prima del rendering, per evitare il lampo di colore */
+try { var t = localStorage.getItem('ts_theme'); if (t && t !== 'auto') document.documentElement.setAttribute('data-theme', t); } catch (e) {}</script>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>Spiccioli</title>
@@ -20,7 +22,7 @@
 <body>
 <header id="topbar">
   <h1 id="title">Spiccioli</h1>
-  <div id="sync" title="Stato sincronizzazione"></div>
+  <div class="tb-r"><div id="sync" title="Stato sincronizzazione"></div><button id="btn-set" aria-label="Impostazioni"></button></div>
 </header>
 
 <main id="view"></main>
