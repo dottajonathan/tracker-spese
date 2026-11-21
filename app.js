@@ -1,7 +1,7 @@
 /* Tracker spese - PWA v1.2 */
 'use strict';
 
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.5.1';
 const LS = { cfg: 'ts_cfg', cache: 'ts_cache', outbox: 'ts_outbox' };
 const TAG_PRESET = ['straordinaria', 'da rimborsare'];
 const DEFAULT_CONTO = 'Revolut Cointestato';
@@ -494,6 +494,7 @@ function cardControlli() {
     const fatto = tuttiMov().some(m => tagsDi(m).includes(`ric:integra22:${mk}`));
     if (!fatto) out.push(v < lo
       ? `<div class="ctl"><span class="ctl-ic bad">${svgIcon('account_balance',20)}</span><div class="bd"><div class="t1">MPS sotto soglia: ${eur(v)}</div><div class="t2">Intervallo ${lo}-${hi} €: integra ${eur(r2(hi - v))} da Casa & Respiro</div></div><button class="btn mini" id="ctl-mps" data-v="${r2(hi - v)}">Registra</button></div>`
+      : v > hi + 200 ? `<div class="ctl"><span class="ctl-ic warn">${svgIcon('account_balance',20)}</span><div class="bd"><div class="t1">MPS molto sopra soglia: ${eur(v)}</div><div class="t2">${eur(r2(v - hi))} oltre il limite di ${hi} €: controlla che non manchi un addebito; se è avanzo vero, è un dato per la revisione dei Pocket</div></div></div>`
       : `<div class="ctl"><span class="ctl-ic ok">${svgIcon('account_balance',20)}</span><div class="bd"><div class="t1">MPS a posto: ${eur(v)}</div><div class="t2">Intervallo ${lo}-${hi} € · ${v > hi ? 'sopra' : 'dentro'}: nessuna azione</div></div></div>`);
   }
   return out.length ? `<div class="sec-h"><h2>Controlli del mese</h2></div><div class="card list">${out.join('')}</div>` : '';
