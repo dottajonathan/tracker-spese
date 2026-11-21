@@ -1,7 +1,7 @@
 /* Tracker spese - PWA v1.2 */
 'use strict';
 
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 const LS = { cfg: 'ts_cfg', cache: 'ts_cache', outbox: 'ts_outbox' };
 const TAG_PRESET = ['straordinaria', 'da rimborsare'];
 const DEFAULT_CONTO = 'Revolut Cointestato';
@@ -177,7 +177,7 @@ function rigaMov(m) {
     : [m.nota ? (m.sottocategoria || m.categoria) : (m.sottocategoria ? m.categoria : ''), m.conto].filter(Boolean).join(' · ');
   const imp = m.tipo === 'spesa' ? -m.importo : +m.importo;
   const txt = m.tipo === 'trasferimento' ? eur(+m.importo) : (imp > 0 ? '+' : '') + eur(imp);
-  const tag = m.tag ? `<span class="pill">${esc(m.tag)}</span>` : '';
+  const tv = tagVisibili(m.tag); const tag = tv ? `<span class="pill">${esc(tv)}</span>` : (String(m.tag||'').includes('ric:') ? `<span class="pill">ricorrente</span>` : '');
   return `<div class="mov ${m._pending?'pending':''}" data-id="${esc(m.id)}">
     ${bolla(def[0], def[1], 42)}
     <div class="bd"><div class="t1">${esc(t1)}</div><div class="t2">${esc(sub)}${tag}</div></div>
@@ -217,6 +217,9 @@ function vistaHome() {
       <div class="hero-chip"><span class="dot neg">${svgIcon('arrow_upward',16)}</span><div><div class="hc-lab">Spese di ${meseNome}</div><div class="hc-val">${eur(usc)}</div></div></div>
     </div>
   </section>
+  ${cardSettimana()}
+  ${cardControlli()}
+  ${cardRicorrenti()}
   <div class="sec-h"><h2>Conti e Pocket</h2></div>
   <div class="accs">
   ${reali.map(c => { const col = contoColor(c.nome); return `<button class="acc-card" data-conto="${esc(c.nome)}" style="--c:${col}">
@@ -327,6 +330,7 @@ function bindVista() {
   });
   document.querySelectorAll('[data-conto]').forEach(el => el.onclick = () => apriConto(el.dataset.conto));
   const vt = $('#vedi-tutti'); if (vt) vt.onclick = () => { tab = 'movimenti'; render(); window.scrollTo(0,0); };
+  if (tab === 'home') { bindRicorrenti(); bindControlli(); }
   const fq = $('#f-q');
   if (fq) {
     fq.oninput = () => { filtro.q = fq.value; const pos = fq.selectionStart; render(); const n=$('#f-q'); n.focus(); n.setSelectionRange(pos,pos); };
@@ -354,6 +358,182 @@ function apriConto(nome) {
     if (diff === 0) { chiudi(); return toast('Saldo già allineato'); }
     await salva({ tipo:'rettifica', importo:diff, conto:nome, data:nowStr(), nota:'Allineamento saldo', tag:'' });
   };
+}
+
+
+/* ---------------- ricorrenti, controlli, settimana (v1.5) ---------------- */
+// Addebiti e spostamenti ricorrenti. g = giorno del mese (31 = ultimo giorno), dal = primo mese in cui vale (yyyy-mm).
+// gruppo '16' = spostamenti automatici del 16 dal conto cointestato. Importi modificabili alla conferma.
+const RICORRENTI = [
+  { id:'verisure',  g:3,  tipo:'spesa', importo:56.63,  conto:'MPS', categoria:'Utenze', sottocategoria:'Verisure', nota:'Verisure', dal:'2026-12' },
+  { id:'allianz-salute', g:4, tipo:'spesa', importo:23.82, conto:'MPS', categoria:'Polizze', sottocategoria:'', nota:'Allianz ULTRA Salute', dal:'2026-12' },
+  { id:'msf',       g:4,  tipo:'spesa', importo:10,     conto:'MPS', categoria:'Beneficenza', sottocategoria:'', nota:'MSF', dal:'2026-12' },
+  { id:'tim',       g:6,  tipo:'spesa', importo:50.99,  conto:'MPS', categoria:'Utenze', sottocategoria:'Internet', nota:'TIM', dal:'2026-12' },
+  { id:'nen-gas',   g:10, tipo:'spesa', importo:196.94, conto:'MPS', categoria:'Utenze', sottocategoria:'Gas', nota:'NeN', dal:'2026-12' },
+  { id:'nen-luce',  g:10, tipo:'spesa', importo:87.03,  conto:'MPS', categoria:'Utenze', sottocategoria:'Luce', nota:'NeN', dal:'2026-12' },
+  { id:'very',      g:10, tipo:'spesa', importo:5.99,   conto:'MPS', categoria:'Utenze', sottocategoria:'Mobile', nota:'Very Mobile', dal:'2026-12' },
+  { id:'agos',      g:16, tipo:'spesa', importo:271.22, conto:'MPS', categoria:'Finanziamenti / Debiti', sottocategoria:'', nota:'Agos', dal:'2026-12' },
+  { id:'allianz-casa', g:23, tipo:'spesa', importo:38.85, conto:'MPS', categoria:'Polizze', sottocategoria:'', nota:'Allianz Casa e Patrimonio', dal:'2026-12' },
+  { id:'prestito-mps', g:27, tipo:'spesa', importo:445.03, conto:'MPS', categoria:'Finanziamenti / Debiti', sottocategoria:'', nota:'Prestito MPS', dal:'2026-11' },
+  { id:'iliad',     g:28, tipo:'spesa', importo:7.99,   conto:'MPS', categoria:'Utenze', sottocategoria:'Mobile', nota:'Iliad', dal:'2026-11' },
+  { id:'allianz-premorienza', g:29, tipo:'spesa', importo:12.04, conto:'MPS', categoria:'Polizze', sottocategoria:'', nota:'Allianz premorienza', dal:'2026-12' },
+  { id:'mutuo',     g:31, tipo:'spesa', importo:524.47, conto:'MPS', categoria:'Finanziamenti / Debiti', sottocategoria:'', nota:'Mutuo MPS', dal:'2026-11' },
+  { id:'a16-scadenze',  g:16, gruppo:'16', tipo:'trasferimento', importo:300, conto:'Revolut Cointestato', conto_dest:'Scadenze', nota:'Automatismo del 16', dal:'2026-12' },
+  { id:'a16-manut',     g:16, gruppo:'16', tipo:'trasferimento', importo:90,  conto:'Revolut Cointestato', conto_dest:'Manutenzione', nota:'Automatismo del 16', dal:'2026-12' },
+  { id:'a16-casa',      g:16, gruppo:'16', tipo:'trasferimento', importo:200, conto:'Revolut Cointestato', conto_dest:'Casa & Respiro', nota:'Automatismo del 16', dal:'2026-12' },
+  { id:'a16-bimbe',     g:16, gruppo:'16', tipo:'trasferimento', importo:200, conto:'Revolut Cointestato', conto_dest:'Fondo Bimbe', nota:'Automatismo del 16', dal:'2026-12' },
+  { id:'a16-vacanze',   g:16, gruppo:'16', tipo:'trasferimento', importo:250, conto:'Revolut Cointestato', conto_dest:'Vacanze e Regali', nota:'Automatismo del 16', dal:'2026-12' },
+  { id:'a16-tr',        g:16, gruppo:'16', tipo:'spesa', importo:100, conto:'Revolut Cointestato', categoria:'Risparmio e Investimenti', sottocategoria:'PAC', nota:'Trade Republic', dal:'2026-12' },
+  { id:'a16-jonny',     g:16, gruppo:'16', tipo:'spesa', importo:170, conto:'Revolut Cointestato', categoria:'Conto personale', sottocategoria:'Jonny', nota:'Conto personale Jonathan', dal:'2026-12' },
+  { id:'a16-sabri',     g:16, gruppo:'16', tipo:'spesa', importo:250, conto:'Revolut Cointestato', categoria:'Conto personale', sottocategoria:'Sabri', nota:'Conto personale Sabri', dal:'2026-12' },
+  { id:'scalable',  g:19, tipo:'spesa', importo:100, conto:'Revolut Cointestato', categoria:'Risparmio e Investimenti', sottocategoria:'PAC', nota:'Scalable Capital', dal:'2026-12' }
+];
+const VITA = { dal:'2026-11-16', budget:161, conto:'Revolut Cointestato', escludiCat:['Conto personale','Risparmio e Investimenti'] };
+// intervallo del controllo del 22 su MPS (decisione 38, aggiornata il 21/11/2026)
+const intervallo22 = mk => mk < '2026-12' ? [1664, 1714] : [1715, 1765];
+
+const LS_SKIP = 'ts_skip';
+const getSkip = () => { try { return new Set(JSON.parse(localStorage.getItem(LS_SKIP)) || []); } catch { return new Set(); } };
+const setSkip = st => localStorage.setItem(LS_SKIP, JSON.stringify([...st]));
+const tagsDi = m => String(m.tag||'').split(',').map(t => t.trim()).filter(Boolean);
+const tagVisibili = t => String(t||'').split(',').map(x => x.trim()).filter(x => x && !x.startsWith('ric:')).join(', ');
+const ultimoGiorno = (y, m) => new Date(y, m, 0).getDate();
+function scadenza(r, mk) { const [y, m] = mk.split('-').map(Number); return `${mk}-${pad(Math.min(r.g, ultimoGiorno(y, m)))}`; }
+// confermato = c'è il movimento col tag, oppure uno registrato a mano nello stesso mese con stesso conto,
+// stessa categoria/destinazione e importo entro ±15% (evita di riproporre ciò che è già stato segnato senza la card)
+function confermato(r, mk) {
+  const t = `ric:${r.id}:${mk}`;
+  return tuttiMov().some(m => tagsDi(m).includes(t) || (!tagsDi(m).some(x => x.startsWith('ric:')) && m.data.slice(0,7) === mk && m.tipo === r.tipo && m.conto === r.conto
+    && (r.tipo === 'trasferimento' ? m.conto_dest === r.conto_dest : m.categoria === r.categoria && (!r.sottocategoria || m.sottocategoria === r.sottocategoria)
+        && (r.categoria !== 'Finanziamenti / Debiti' && r.categoria !== 'Polizze' || normNota(m.nota).includes(normNota(r.nota).split(' ')[0])))
+    && (Math.abs(+m.importo - r.importo) <= r.importo * 0.15 || (r.nota && normNota(m.nota).includes(normNota(r.nota).split(' ')[0])))));
+}
+// voci da confermare: scadute nel mese corrente o precedente (dal mese 'dal'), e in arrivo nei prossimi 5 giorni
+function vociRicorrenti() {
+  const oggi = nowStr().slice(0,10), mkOra = oggi.slice(0,7);
+  const d = new Date(); d.setMonth(d.getMonth() - 1); const mkPrima = nowStr(d).slice(0,7);
+  const tra5 = nowStr(new Date(Date.now() + 5*864e5)).slice(0,10);
+  const skip = getSkip(), out = [];
+  for (const mk of [mkPrima, mkOra]) for (const r of RICORRENTI) {
+    if (mk < r.dal || confermato(r, mk) || skip.has(`${r.id}|${mk}`)) continue;
+    if (!contiAttivi().some(c => c.nome === r.conto)) continue;
+    const sc = scadenza(r, mk);
+    if (sc <= oggi) out.push({ r, mk, sc, stato:'scaduta' });
+    else if (sc <= tra5) out.push({ r, mk, sc, stato:'arrivo' });
+  }
+  return out.sort((a,b) => a.sc.localeCompare(b.sc));
+}
+function movDaRicorrente(v) {
+  const r = v.r, adesso = nowStr();
+  return { tipo:r.tipo, importo:r.importo, conto:r.conto, conto_dest:r.conto_dest||'', categoria:r.categoria||'', sottocategoria:r.sottocategoria||'',
+    nota:r.nota||'', tag:`ric:${r.id}:${v.mk}`, data: v.sc + ' 08:00:00' <= adesso ? v.sc + ' 08:00:00' : adesso };
+}
+async function aggiungiSilenzioso(mov) {
+  try { const j = await api('add', { movimento: mov }); S.movimenti.push(j.movimento); return true; }
+  catch (e) { if (e.server) { toast('Errore: ' + e.message, 4000); return false; }
+    const ob = getOutbox(); ob.push({ tempId:'tmp'+Date.now()+Math.random().toString(36).slice(2,5), movimento:mov }); setOutbox(ob); return true; }
+}
+function rigaRic(v) {
+  const r = v.r, d = r.tipo === 'trasferimento' ? TIPO_CAT.trasferimento : catDef(r.categoria);
+  const quando = v.stato === 'arrivo' ? 'in arrivo ' : '';
+  const dt = parseD(v.sc + ' 00:00:00').toLocaleDateString('it-IT',{day:'numeric',month:'short'});
+  return `<div class="ric" data-ric="${r.id}|${v.mk}">
+    ${bolla(d[0], d[1], 38)}
+    <button class="bd ric-open"><span class="t1">${esc(r.tipo === 'trasferimento' ? '→ ' + r.conto_dest : r.nota)}</span><span class="t2">${quando}${dt} · ${esc(r.conto)}</span></button>
+    <span class="amt">${eur(r.importo)}</span>
+    <button class="icon-btn sm ric-skip" aria-label="Salta">${svgIcon('close',18)}</button>
+    <button class="icon-btn sm ok ric-ok" aria-label="Conferma">${svgIcon('check',18)}</button></div>`;
+}
+function cardRicorrenti() {
+  const voci = vociRicorrenti();
+  if (!voci.length) return '';
+  const g16 = voci.filter(v => v.r.gruppo === '16' && v.stato === 'scaduta');
+  const altre = voci.filter(v => !(v.r.gruppo === '16' && v.stato === 'scaduta'));
+  const scad = altre.filter(v => v.stato === 'scaduta');
+  return `<div class="sec-h"><h2>Da confermare</h2>${scad.length > 1 ? '<button class="link" id="ric-all">Conferma scaduti</button>' : ''}</div>
+  ${g16.length ? `<div class="card ric-g"><div class="row"><div><div class="t1">Spostamenti del 16</div><div class="muted small">${g16.length} movimenti · ${eur(r2(g16.reduce((a,v)=>a+v.r.importo,0)))}</div></div>
+     <button class="btn mini" id="ric-16">Conferma tutti</button></div>
+     <details><summary class="muted small">Vedi o modifica uno per uno</summary>${g16.map(rigaRic).join('')}</details></div>` : ''}
+  ${altre.length ? `<div class="card list">${altre.map(rigaRic).join('')}</div>` : ''}
+  <p class="muted small" style="margin:4px 8px 0">Tocca il nome per cambiare l'importo prima di confermare.</p>`;
+}
+function trovaVoce(key) { const [id, mk] = key.split('|'); const r = RICORRENTI.find(x => x.id === id); return { r, mk, sc: scadenza(r, mk) }; }
+async function confermaVoci(voci) {
+  let n = 0; toast(`Salvataggio di ${voci.length}…`, 60000);
+  for (const v of voci) if (await aggiungiSilenzioso(movDaRicorrente(v))) n++;
+  persistiCache(); setSync(''); toast(`${n} confermat${n===1?'o':'i'} ✓`); render();
+}
+function bindRicorrenti() {
+  document.querySelectorAll('.ric').forEach(el => {
+    const v = trovaVoce(el.dataset.ric);
+    el.querySelector('.ric-ok').onclick = () => confermaVoci([v]);
+    el.querySelector('.ric-skip').onclick = () => { const st = getSkip(); st.add(`${v.r.id}|${v.mk}`); setSkip(st); toast('Saltato per questo mese'); render(); };
+    el.querySelector('.ric-open').onclick = () => { apriForm(null); Object.assign(F, movDaRicorrente(v), { importoTxt: String(v.r.importo).replace('.',','), step:'riepilogo', contoScelto:true, catScelta:true }); renderForm(); };
+  });
+  const b16 = $('#ric-16'); if (b16) b16.onclick = () => confermaVoci(vociRicorrenti().filter(v => v.r.gruppo === '16' && v.stato === 'scaduta'));
+  const ba = $('#ric-all'); if (ba) ba.onclick = () => confermaVoci(vociRicorrenti().filter(v => v.stato === 'scaduta' && v.r.gruppo !== '16'));
+}
+
+// controlli del mese: avanzo dal 16 al 21, MPS dal 22 al 25
+function cardControlli() {
+  const oggi = nowStr().slice(0,10), gg = +oggi.slice(8,10), mk = oggi.slice(0,7);
+  const s = saldi(); const out = [];
+  if (gg >= 16 && gg <= 21 && mk >= '2026-12') {
+    const fatto = tuttiMov().some(m => tagsDi(m).includes(`ric:avanzo:${mk}`));
+    const mancano16 = RICORRENTI.some(r => r.gruppo === '16' && mk >= r.dal && !confermato(r, mk));
+    if (!fatto) {
+      const av = r2(s['Revolut Cointestato'] - 700);
+      out.push(mancano16
+        ? `<div class="ctl"><span class="ctl-ic warn">${svgIcon('savings',20)}</span><div class="bd"><div class="t1">Avanzo del ciclo</div><div class="t2">Prima conferma gli spostamenti del 16</div></div></div>`
+        : av > 0 ? `<div class="ctl"><span class="ctl-ic ok">${svgIcon('savings',20)}</span><div class="bd"><div class="t1">Avanzo da spostare: ${eur(av)}</div><div class="t2">Saldo cointestato − 700 € → Casa & Respiro</div></div><button class="btn mini" id="ctl-avanzo" data-v="${av}">Registra</button></div>`
+        : `<div class="ctl"><span class="ctl-ic bad">${svgIcon('savings',20)}</span><div class="bd"><div class="t1">Nessun avanzo: ${eur(av)}</div><div class="t2">Ciclo chiuso sotto 700 €: si recupera con la regola settimanale</div></div></div>`);
+    }
+  }
+  if (gg >= 22 && gg <= 25) {
+    const [lo, hi] = intervallo22(mk), v = s['MPS'];
+    const fatto = tuttiMov().some(m => tagsDi(m).includes(`ric:integra22:${mk}`));
+    if (!fatto) out.push(v < lo
+      ? `<div class="ctl"><span class="ctl-ic bad">${svgIcon('account_balance',20)}</span><div class="bd"><div class="t1">MPS sotto soglia: ${eur(v)}</div><div class="t2">Intervallo ${lo}-${hi} €: integra ${eur(r2(hi - v))} da Casa & Respiro</div></div><button class="btn mini" id="ctl-mps" data-v="${r2(hi - v)}">Registra</button></div>`
+      : `<div class="ctl"><span class="ctl-ic ok">${svgIcon('account_balance',20)}</span><div class="bd"><div class="t1">MPS a posto: ${eur(v)}</div><div class="t2">Intervallo ${lo}-${hi} € · ${v > hi ? 'sopra' : 'dentro'}: nessuna azione</div></div></div>`);
+  }
+  return out.length ? `<div class="sec-h"><h2>Controlli del mese</h2></div><div class="card list">${out.join('')}</div>` : '';
+}
+function bindControlli() {
+  const mk = nowStr().slice(0,7);
+  const a = $('#ctl-avanzo'); if (a) a.onclick = () => { apriForm(null); Object.assign(F, { tipo:'trasferimento', importoTxt:String(a.dataset.v).replace('.',','), conto:'Revolut Cointestato', conto_dest:'Casa & Respiro', nota:'Avanzo del ciclo', tag:`ric:avanzo:${mk}`, step:'riepilogo' }); renderForm(); };
+  const m = $('#ctl-mps'); if (m) m.onclick = () => { apriForm(null); Object.assign(F, { tipo:'trasferimento', importoTxt:String(m.dataset.v).replace('.',','), conto:'Casa & Respiro', conto_dest:'MPS', nota:'Integrazione controllo del 22', tag:`ric:integra22:${mk}`, step:'riepilogo' }); renderForm(); };
+}
+
+// budget settimanale della vita quotidiana (regola 6.2)
+function lunedi(d) { const x = new Date(d); x.setHours(0,0,0,0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; }
+function spesaVita(da, a) {
+  const s0 = nowStr(da).slice(0,10), s1 = nowStr(a).slice(0,10);
+  return r2(tuttiMov().filter(m => m.tipo === 'spesa' && m.conto === VITA.conto && !VITA.escludiCat.includes(m.categoria)
+    && !tagsDi(m).some(t => /^ric:a16-/.test(t)) && m.data.slice(0,10) >= s0 && m.data.slice(0,10) < s1).reduce((a,m) => a + +m.importo, 0));
+}
+function settimana() {
+  const l0 = lunedi(new Date()), l1 = new Date(l0), lm1 = new Date(l0), lm2 = new Date(l0);
+  l1.setDate(l1.getDate() + 7); lm1.setDate(lm1.getDate() - 7); lm2.setDate(lm2.getDate() - 14);
+  const valida = d => nowStr(d).slice(0,10) >= VITA.dal;
+  const over1 = valida(lm1) ? Math.max(0, spesaVita(lm1, l0) - VITA.budget) : 0, over2 = valida(lm2) ? Math.max(0, spesaVita(lm2, lm1) - VITA.budget) : 0;
+  const recupero = r2((over1 > 80 ? over1 / 2 : over1) + (over2 > 80 ? over2 / 2 : 0));
+  const budget = r2(VITA.budget - recupero), speso = spesaVita(l0, l1);
+  return { budget, speso, resto: r2(budget - speso), recupero };
+}
+function cardSettimana() {
+  const w = settimana(), pct = w.budget > 0 ? Math.min(100, w.speso / w.budget * 100) : 100;
+  const col = w.resto < 0 ? 'var(--neg)' : pct > 80 ? 'var(--warn)' : 'var(--pos)';
+  return `<div class="card week"><div class="row"><div><div class="muted small">Vita quotidiana · questa settimana</div>
+    <div class="week-v">${eur(w.speso)} <span class="muted">di ${eur(w.budget)}</span></div></div>
+    <div class="week-r" style="color:${col}">${w.resto >= 0 ? 'restano' : 'sforati'}<b>${eur(Math.abs(w.resto))}</b></div></div>
+    <div class="barwrap big"><div class="bar" style="width:${pct.toFixed(1)}%;background:${col}"></div></div>
+    ${w.recupero ? `<div class="muted small" style="margin-top:6px">Budget ridotto di ${eur(w.recupero)} per recuperare le settimane precedenti</div>` : ''}</div>`;
+}
+
+// doppioni: stesso tipo, importo, giorno e categoria (o stessi conti per i trasferimenti)
+function possibileDoppione(mov) {
+  return tuttiMov().find(m => m.id !== mov.id && m.tipo === mov.tipo && Math.abs(+m.importo - mov.importo) < 0.005 && m.data.slice(0,10) === mov.data.slice(0,10)
+    && (mov.tipo === 'trasferimento' ? m.conto === mov.conto && m.conto_dest === mov.conto_dest : m.categoria === mov.categoria && (m.sottocategoria||'') === (mov.sottocategoria||'')));
 }
 
 /* ---------------- form movimento a step ---------------- */
@@ -431,8 +611,9 @@ function apriForm(m) {
   renderForm();
 }
 const passiPer = t => t === 'trasferimento' ? ['importo','conti','riepilogo'] : t === 'rettifica' ? ['importo','riepilogo'] : ['importo','nota','categoria','riepilogo'];
-function vai(step) { F.step = step; renderForm(); }
-function avanti() { const p = passiPer(F.tipo); const i = p.indexOf(F.step); if (i < p.length - 1) vai(p[i+1]); }
+function vai(step) { F.step = step; if (step === 'riepilogo') F.daRiep = false; renderForm(); }
+// se il passo è stato riaperto dal riepilogo, 'avanti' torna lì invece di ripercorrere tutto il wizard
+function avanti() { const p = passiPer(F.tipo); const i = p.indexOf(F.step); if (F.daRiep && p.includes('riepilogo')) return vai('riepilogo'); if (i < p.length - 1) vai(p[i+1]); }
 function indietro() { const p = passiPer(F.tipo); const i = p.indexOf(F.step); if (i > 0) vai(p[i-1]); else chiudi(); }
 
 function testataStep(titolo) {
@@ -575,7 +756,7 @@ function bindForm() {
   }
   if (F.step === 'riepilogo') {
     const leggiNota2 = () => { const n2 = $('#f-nota2'); if (n2) F.nota = n2.value; };
-    document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => { leggiData(); leggiNota2(); vai(b.dataset.go); });
+    document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => { leggiData(); leggiNota2(); F.daRiep = true; vai(b.dataset.go); });
     document.querySelectorAll('[data-conto-sel]').forEach(b => b.onclick = () => { leggiData(); leggiNota2(); F.conto = b.dataset.contoSel; F.contoScelto = true; renderForm(); });
     const uc = $('#usa-conto'); if (uc) uc.onclick = () => { leggiData(); leggiNota2(); F.conto = uc.dataset.c; F.contoScelto = true; renderForm(); };
     const tags = (F.tag||'').split(',').map(t=>t.trim()).filter(Boolean);
@@ -591,9 +772,17 @@ function bindForm() {
       const mov = { id:F.id, tipo:F.tipo, importo:imp, conto:F.conto, conto_dest:F.tipo==='trasferimento'?F.conto_dest:'',
         categoria:(F.tipo==='spesa'||F.tipo==='entrata')?F.categoria:'', sottocategoria:(F.tipo==='spesa'||F.tipo==='entrata')?(F.sottocategoria||''):'',
         nota:(F.nota||'').trim(), tag:F.tag||'', data:F.data };
+      if (!mov.id && !F.dupOk) { const d = possibileDoppione(mov); if (d) return chiediDoppione(mov, d); }
       await salva(mov);
     };
   }
+}
+function chiediDoppione(mov, d) {
+  sheet(`<h2 class="wz-h">Possibile doppione</h2><p class="muted">C'è già un movimento uguale nello stesso giorno:</p>
+    <div class="card list">${rigaMov(d)}</div>
+    <div class="btns"><button class="btn sec" id="dp-no">Torna indietro</button><button class="btn" id="dp-si">Salva comunque</button></div>`);
+  $('#dp-no').onclick = () => renderForm();
+  $('#dp-si').onclick = async () => { F.dupOk = true; await salva(mov); };
 }
 
 async function salva(mov) {
@@ -644,4 +833,5 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 try { const c = JSON.parse(localStorage.getItem(LS.cache)); if (c) S = c; } catch {}
 render();
 if (getCfg()) caricaDati();
+if (getCfg() && new URLSearchParams(location.search).get('nuovo') === '1') { history.replaceState(null, '', location.pathname); apriForm(null); }
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
