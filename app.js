@@ -1,7 +1,7 @@
 /* Tracker spese - PWA v1.2 */
 'use strict';
 
-const APP_VERSION = '1.5.1';
+const APP_VERSION = '1.5.2';
 const LS = { cfg: 'ts_cfg', cache: 'ts_cache', outbox: 'ts_outbox' };
 const TAG_PRESET = ['straordinaria', 'da rimborsare'];
 const DEFAULT_CONTO = 'Revolut Cointestato';
@@ -330,7 +330,7 @@ function bindVista() {
   });
   document.querySelectorAll('[data-conto]').forEach(el => el.onclick = () => apriConto(el.dataset.conto));
   const vt = $('#vedi-tutti'); if (vt) vt.onclick = () => { tab = 'movimenti'; render(); window.scrollTo(0,0); };
-  if (tab === 'home') { bindRicorrenti(); bindControlli(); }
+  if (tab === 'home') { bindRicorrenti(); bindControlli(); const wk = $('#week'); if (wk) wk.onclick = apriSettimana; }
   const fq = $('#f-q');
   if (fq) {
     fq.oninput = () => { filtro.q = fq.value; const pos = fq.selectionStart; render(); const n=$('#f-q'); n.focus(); n.setSelectionRange(pos,pos); };
@@ -507,11 +507,12 @@ function bindControlli() {
 
 // budget settimanale della vita quotidiana (regola 6.2)
 function lunedi(d) { const x = new Date(d); x.setHours(0,0,0,0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; }
-function spesaVita(da, a) {
+function movVita(da, a) {
   const s0 = nowStr(da).slice(0,10), s1 = nowStr(a).slice(0,10);
-  return r2(tuttiMov().filter(m => m.tipo === 'spesa' && m.conto === VITA.conto && !VITA.escludiCat.includes(m.categoria)
-    && !tagsDi(m).some(t => /^ric:a16-/.test(t)) && m.data.slice(0,10) >= s0 && m.data.slice(0,10) < s1).reduce((a,m) => a + +m.importo, 0));
+  return tuttiMov().filter(m => m.tipo === 'spesa' && m.conto === VITA.conto && !VITA.escludiCat.includes(m.categoria)
+    && !tagsDi(m).some(t => /^ric:a16-/.test(t)) && m.data.slice(0,10) >= s0 && m.data.slice(0,10) < s1);
 }
+const spesaVita = (da, a) => r2(movVita(da, a).reduce((t,m) => t + +m.importo, 0));
 function settimana() {
   const l0 = lunedi(new Date()), l1 = new Date(l0), lm1 = new Date(l0), lm2 = new Date(l0);
   l1.setDate(l1.getDate() + 7); lm1.setDate(lm1.getDate() - 7); lm2.setDate(lm2.getDate() - 14);
@@ -519,16 +520,27 @@ function settimana() {
   const over1 = valida(lm1) ? Math.max(0, spesaVita(lm1, l0) - VITA.budget) : 0, over2 = valida(lm2) ? Math.max(0, spesaVita(lm2, lm1) - VITA.budget) : 0;
   const recupero = r2((over1 > 80 ? over1 / 2 : over1) + (over2 > 80 ? over2 / 2 : 0));
   const budget = r2(VITA.budget - recupero), speso = spesaVita(l0, l1);
-  return { budget, speso, resto: r2(budget - speso), recupero };
+  return { budget, speso, resto: r2(budget - speso), recupero, da: l0, a: l1 };
 }
 function cardSettimana() {
   const w = settimana(), pct = w.budget > 0 ? Math.min(100, w.speso / w.budget * 100) : 100;
   const col = w.resto < 0 ? 'var(--neg)' : pct > 80 ? 'var(--warn)' : 'var(--pos)';
-  return `<div class="card week"><div class="row"><div><div class="muted small">Vita quotidiana · questa settimana</div>
+  return `<button class="card week" id="week"><div class="row"><div><div class="muted small">Vita quotidiana · questa settimana</div>
     <div class="week-v">${eur(w.speso)} <span class="muted">di ${eur(w.budget)}</span></div></div>
     <div class="week-r" style="color:${col}">${w.resto >= 0 ? 'restano' : 'sforati'}<b>${eur(Math.abs(w.resto))}</b></div></div>
     <div class="barwrap big"><div class="bar" style="width:${pct.toFixed(1)}%;background:${col}"></div></div>
-    ${w.recupero ? `<div class="muted small" style="margin-top:6px">Budget ridotto di ${eur(w.recupero)} per recuperare le settimane precedenti</div>` : ''}</div>`;
+    ${w.recupero ? `<div class="muted small" style="margin-top:6px">Budget ridotto di ${eur(w.recupero)} per recuperare le settimane precedenti</div>` : ''}</button>`;
+}
+
+function apriSettimana() {
+  const w = settimana(), movs = movVita(w.da, w.a).sort((x,y) => y.data.localeCompare(x.data));
+  const fine = new Date(w.a); fine.setDate(fine.getDate() - 1);
+  const f = d => d.toLocaleDateString('it-IT', { day:'numeric', month:'short' });
+  sheet(`<h2 class="wz-h">Vita quotidiana</h2>
+    <p class="muted" style="margin-top:-6px">${f(w.da)} – ${f(fine)} · ${movs.length} spes${movs.length===1?'a':'e'} · ${eur(w.speso)} di ${eur(w.budget)}</p>
+    ${movs.length ? listaPerGiorno(movs) : '<p class="muted">Nessuna spesa conteggiata questa settimana.</p>'}
+    <p class="muted small" style="margin-top:12px">Contano le spese del Revolut Cointestato. Esclusi: spostamenti del 16, conti personali, PAC e spese registrate sui Pocket.</p>`);
+  bindVista();
 }
 
 // doppioni: stesso tipo, importo, giorno e categoria (o stessi conti per i trasferimenti)

@@ -210,3 +210,5 @@ th:first-child,td:first-child{text-align:left;position:sticky;left:0;background:
 .week-v{font-size:20px;font-weight:800;margin-top:2px}.week-v .muted{font-size:14px;font-weight:600}
 .week-r{text-align:right;font-size:12.5px;font-weight:700;display:flex;flex-direction:column}.week-r b{font-size:18px}
 .barwrap.big{height:10px;margin-top:12px}
+button.card.week{display:block;width:100%;border:0;font:inherit;color:inherit;text-align:left;cursor:pointer}
+button.card.week:active{transform:scale(.99)}
