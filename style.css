@@ -260,3 +260,5 @@ button.card.rp-card:active{transform:scale(.99)}
 .rp-accv{text-align:right}.rp-accv .small{font-weight:700}
 .rp-bar{height:5px;margin-top:5px;max-width:160px}
 .rp-totrow{border-top:2px solid var(--text)!important}
+.rp-ev{background:var(--accent-soft)!important;color:var(--text)!important;font-weight:600}
+.rp-ev .mi{color:var(--accent)}

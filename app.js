@@ -1,7 +1,7 @@
 /* Tracker spese - PWA v1.2 */
 'use strict';
 
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.7.1';
 const LS = { cfg: 'ts_cfg', cache: 'ts_cache', outbox: 'ts_outbox' };
 const TAG_PRESET = ['straordinaria', 'da rimborsare'];
 const DEFAULT_CONTO = 'Revolut Cointestato';
@@ -568,13 +568,15 @@ function riepilogo() {
   const P0 = past.length > 1 ? past[past.length-2] : null;
   const N = diffG(S0, ieri) + 1;
   const finestra = (a, b) => {
-    let f = 0, v = 0; const daily = new Array(diffG(a, b) + 1).fill(0);
+    let f = 0, v = 0, str = 0; const daily = new Array(diffG(a, b) + 1).fill(0), perCat = {}, varMov = [];
     for (const m of movs) { const g = giorno(m); if (g < a || g > b || !isConsumo(m)) continue;
-      if (natura(m) === 'fissa') f += +m.importo; else v += +m.importo; daily[diffG(a, g)] += +m.importo; }
-    let c = 0; return { f: r2(f), v: r2(v), cum: daily.map(x => (c += x, r2(c))) };
+      if (natura(m) === 'fissa') f += +m.importo; else { v += +m.importo; perCat[m.categoria] = (perCat[m.categoria] || 0) + +m.importo; varMov.push(m); }
+      if (tagsDi(m).includes('straordinaria')) str += +m.importo;
+      daily[diffG(a, g)] += +m.importo; }
+    let c = 0; return { f: r2(f), v: r2(v), str: r2(str), perCat, varMov, cum: daily.map(x => (c += x, r2(c))) };
   };
   const cur = finestra(S0, ieri);
-  let prev = { f:0, v:0 }, pcum = [], pend = null, fisseDopo = 0;
+  let prev = { f:0, v:0, str:0, perCat:{}, varMov:[] }, pcum = [], pend = null, fisseDopo = 0;
   if (P0) {
     const fineP = addG(S0, -1);
     pend = addG(P0, N - 1); if (pend > fineP) pend = fineP;
@@ -596,11 +598,48 @@ function riepilogo() {
   for (const m of movIeri) {
     if (m.tipo !== 'spesa') continue;
     if (!catInfo(m.categoria, m.sottocategoria, 'spesa')) avvisi.push(`Categoria mancante o sconosciuta: ${eur(+m.importo)} ${m.nota || ''}`.trim());
+    // stessa categoria/sottocategoria e stessa nota (es. "Esselunga Online" solo con i suoi ordini, non con i piccoli acquisti)
+    const nm = normNota(m.nota);
     const st = movs.filter(x => x !== m && x.tipo === 'spesa' && x.categoria === m.categoria && (x.sottocategoria||'') === (m.sottocategoria||'')
-      && giorno(x) >= da90 && giorno(x) < ieri).map(x => +x.importo);
-    if (st.length >= 3 && +m.importo > 3 * mediana(st)) avvisi.push(`Importo insolito: ${eur(+m.importo)} in ${m.categoria} (mediana 90 gg ${eur(mediana(st))})`);
+      && normNota(x.nota) === nm && giorno(x) >= da90 && giorno(x) < ieri).map(x => +x.importo);
+    if (st.length >= 3 && +m.importo > 3 * mediana(st)) avvisi.push(`Importo insolito: ${eur(+m.importo)} per «${m.nota || m.sottocategoria || m.categoria}» (di solito ${eur(mediana(st))}, mediana 90 gg)`);
   }
-  return { ieri, S:S0, P:P0, N, pend, cur, prev, pcum, fisseDopo, movIeri, spesi, s1, s0, reali, totale, dTot, avvisi };
+  return { ieri, S:S0, P:P0, N, pend, cur, prev, pcum, fisseDopo, movIeri, spesi, s1, s0, reali, totale, dTot, avvisi, evidenza: evidenza(cur, prev, P0) };
+}
+
+// Un solo fatto che aiuta a leggere il confronto (regole fisse al posto del commento scritto da Claude).
+// Priorità: 1) spese straordinarie  2) categoria che spiega la differenza delle variabili  3) singola spesa che pesa sulle variabili.
+const pct = (a, b) => (a - b) / b * 100;
+const segnoPct = p => `${p > 0 ? '+' : '−'}${Math.abs(p).toFixed(0)}%`;
+function evidenza(cur, prev, P) {
+  const tot = cur.f + cur.v, ptot = prev.f + prev.v;
+  if (cur.str > 0 || prev.str > 0) {
+    const a = tot - cur.str, b = ptot - prev.str;
+    return `Spese con tag «straordinaria»: ${eur(cur.str)} in questo periodo${P ? `, ${eur(prev.str)} negli stessi giorni del precedente` : ''}.`
+      + (P && b > 0 ? ` Senza queste il periodo è ${eur(r2(a))}, ${segnoPct(pct(a, b))} rispetto al precedente.` : '');
+  }
+  if (P && prev.v > 0) {
+    const dv = cur.v - prev.v;
+    if (Math.abs(dv) >= 50 && Math.abs(pct(cur.v, prev.v)) >= 10) {
+      const cats = [...new Set([...Object.keys(cur.perCat), ...Object.keys(prev.perCat)])]
+        .map(c => [c, (cur.perCat[c] || 0) - (prev.perCat[c] || 0)]).filter(([, d]) => Math.sign(d) === Math.sign(dv)).sort((x, y) => Math.abs(y[1]) - Math.abs(x[1]));
+      if (cats.length && Math.abs(cats[0][1]) >= Math.abs(dv) * 0.5) {
+        const [cat, dc] = cats[0], ad = Math.abs(dc), sg = x => `${x > 0 ? '+' : '−'}${eur(Math.abs(r2(x)))}`;
+        const chi = ad > Math.abs(dv) * 1.05 ? `la voce che pesa di più è ${cat} (${sg(dc)}), in parte compensata da altre categorie in ${dv > 0 ? 'calo' : 'aumento'}`
+          : `${ad >= Math.abs(dv) * 0.9 ? 'quasi tutta' : 'soprattutto'} da ${cat} (${sg(dc)})`;
+        let txt = `Variabili ${sg(dv)} rispetto agli stessi giorni del periodo precedente: ${chi}.`;
+        // se l'aumento della categoria è dovuto a una sola spesa, la nomina (tipico caso una tantum)
+        const top = dv > 0 && cur.varMov.filter(m => m.categoria === cat).sort((x, y) => y.importo - x.importo)[0];
+        if (top && +top.importo >= 100 && +top.importo >= dc * 0.6)
+          txt += ` Dentro ${cat} conta soprattutto «${top.nota || top.sottocategoria || cat}» (${eur(+top.importo)}): se è una tantum, segnala con il tag «straordinaria».`;
+        return txt;
+      }
+    }
+  }
+  const big = cur.varMov.slice().sort((x, y) => y.importo - x.importo)[0];
+  if (big && +big.importo >= 100 && cur.v > 0 && +big.importo / cur.v >= 0.2)
+    return `La spesa più grande del periodo è «${big.nota || big.sottocategoria || big.categoria}» (${eur(+big.importo)}, ${(+big.importo / cur.v * 100).toFixed(0)}% delle variabili): se è una tantum, falsa il confronto. Puoi segnarla con il tag «straordinaria».`;
+  return '';
 }
 
 function pillVs(a, b) {
@@ -663,6 +702,7 @@ function apriRiepilogo() {
       <div class="rp-legend"><span><i style="background:var(--accent)"></i>Periodo attuale</span><span><i class="dash"></i>${R.P ? `Dal ${esc(ggMese(R.P))}` : 'Nessun periodo precedente'}</span></div>
       <div class="rp-fv"><div><div class="muted small">Fisse</div><div class="amt">${eur(R.cur.f)}</div>${pillVs(R.cur.f, R.prev.f)}</div>
         <div><div class="muted small">Variabili</div><div class="amt">${eur(R.cur.v)}</div>${pillVs(R.cur.v, R.prev.v)}</div></div>
+      ${R.evidenza ? `<div class="hint ok rp-ev">${svgIcon('lightbulb',18)}<span>${esc(R.evidenza)}</span></div>` : ''}
       ${nota ? `<p class="muted small" style="margin:10px 0 0">${esc(nota)}</p>` : ''}
       <p class="muted small" style="margin:8px 0 0">Spese di consumo confrontate con gli stessi ${R.N} giorni del periodo precedente.</p></div>
     <div class="set-sec">Saldi a fine ${+R.ieri.slice(8)}/${+R.ieri.slice(5,7)}</div>
