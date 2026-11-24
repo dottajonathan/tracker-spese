@@ -1,7 +1,7 @@
 /* Tracker spese - PWA v1.2 */
 'use strict';
 
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.7.0';
 const LS = { cfg: 'ts_cfg', cache: 'ts_cache', outbox: 'ts_outbox' };
 const TAG_PRESET = ['straordinaria', 'da rimborsare'];
 const DEFAULT_CONTO = 'Revolut Cointestato';
@@ -217,6 +217,7 @@ function vistaHome() {
       <div class="hero-chip"><span class="dot neg">${svgIcon('arrow_upward',16)}</span><div><div class="hc-lab">Spese di ${meseNome}</div><div class="hc-val">${eur(usc)}</div></div></div>
     </div>
   </section>
+  ${cardIeri()}
   ${cardSettimana()}
   ${cardControlli()}
   ${cardRicorrenti()}
@@ -331,7 +332,7 @@ function bindVista() {
   });
   document.querySelectorAll('[data-conto]').forEach(el => el.onclick = () => apriConto(el.dataset.conto));
   const vt = $('#vedi-tutti'); if (vt) vt.onclick = () => { tab = 'movimenti'; render(); window.scrollTo(0,0); };
-  if (tab === 'home') { bindRicorrenti(); bindControlli(); const wk = $('#week'); if (wk) wk.onclick = apriSettimana; }
+  if (tab === 'home') { bindRicorrenti(); bindControlli(); const wk = $('#week'); if (wk) wk.onclick = apriSettimana; const rp = $('#rp-open'); if (rp) rp.onclick = apriRiepilogo; }
   const fq = $('#f-q');
   if (fq) {
     fq.oninput = () => { filtro.q = fq.value; const pos = fq.selectionStart; render(); const n=$('#f-q'); n.focus(); n.setSelectionRange(pos,pos); };
@@ -541,6 +542,132 @@ function apriSettimana() {
     <p class="muted" style="margin-top:-6px">${f(w.da)} – ${f(fine)} · ${movs.length} spes${movs.length===1?'a':'e'} · ${eur(w.speso)} di ${eur(w.budget)}</p>
     ${movs.length ? listaPerGiorno(movs) : '<p class="muted">Nessuna spesa conteggiata questa settimana.</p>'}
     <p class="muted small" style="margin-top:12px">Contano le spese del Revolut Cointestato. Esclusi: spostamenti del 16, conti personali, PAC e spese registrate sui Pocket.</p>`);
+  bindVista();
+}
+
+/* ---------------- riepilogo di ieri (v1.7) ---------------- */
+// Sostituisce il riepilogo giornaliero pianificato: stessi calcoli, fatti dall'app sui dati già caricati.
+// Periodo contabile = dal giorno del primo "Stipendio netto" di ogni mese di calendario.
+const RP = { sogliaMPS: 250 };
+const isoG = d => nowStr(d).slice(0,10);
+const addG = (s, n) => { const d = parseD(s + ' 12:00:00'); d.setDate(d.getDate() + n); return isoG(d); };
+const diffG = (a, b) => Math.round((parseD(b + ' 12:00:00') - parseD(a + ' 12:00:00')) / 864e5);
+const ggMese = s => parseD(s + ' 12:00:00').toLocaleDateString('it-IT', { day:'numeric', month:'short' });
+const isStipendio = m => m.tipo === 'entrata' && m.categoria === 'Reddito' && m.sottocategoria === 'Stipendio netto';
+const mediana = a => { const s = a.slice().sort((x,y) => x - y), k = s.length >> 1; return s.length % 2 ? s[k] : (s[k-1] + s[k]) / 2; };
+
+function riepilogo() {
+  const dI = new Date(); dI.setDate(dI.getDate() - 1);   // calendario, non -24h (cambio ora legale)
+  const ieri = isoG(dI), primaIeri = addG(ieri, -1);
+  const movs = tuttiMov(), giorno = m => m.data.slice(0,10);
+  // inizi dei periodi
+  const perMese = {};
+  movs.filter(isStipendio).forEach(m => { const g = giorno(m), k = g.slice(0,7); if (!perMese[k] || g < perMese[k]) perMese[k] = g; });
+  const past = Object.values(perMese).sort().filter(g => g <= ieri);
+  const S0 = past.length ? past[past.length-1] : ieri.slice(0,8) + '01';
+  const P0 = past.length > 1 ? past[past.length-2] : null;
+  const N = diffG(S0, ieri) + 1;
+  const finestra = (a, b) => {
+    let f = 0, v = 0; const daily = new Array(diffG(a, b) + 1).fill(0);
+    for (const m of movs) { const g = giorno(m); if (g < a || g > b || !isConsumo(m)) continue;
+      if (natura(m) === 'fissa') f += +m.importo; else v += +m.importo; daily[diffG(a, g)] += +m.importo; }
+    let c = 0; return { f: r2(f), v: r2(v), cum: daily.map(x => (c += x, r2(c))) };
+  };
+  const cur = finestra(S0, ieri);
+  let prev = { f:0, v:0 }, pcum = [], pend = null, fisseDopo = 0;
+  if (P0) {
+    const fineP = addG(S0, -1);
+    pend = addG(P0, N - 1); if (pend > fineP) pend = fineP;
+    prev = finestra(P0, pend); pcum = finestra(P0, fineP).cum;
+    fisseDopo = r2(movs.filter(m => isConsumo(m) && natura(m) === 'fissa' && giorno(m) > pend && giorno(m) < S0).reduce((a,m) => a + +m.importo, 0));
+  }
+  // movimenti e saldi
+  const movIeri = movs.filter(m => giorno(m) === ieri).sort((a,b) => b.data.localeCompare(a.data));
+  const spesi = r2(movIeri.filter(isConsumo).reduce((a,m) => a + +m.importo, 0));
+  const s1 = saldi(ieri + ' 23:59:59'), s0 = saldi(primaIeri + ' 23:59:59');
+  const reali = contiReali(), nelTot = c => c.nel_totale === true || c.nel_totale === 'TRUE';
+  const totale = r2(reali.filter(nelTot).reduce((a,c) => a + s1[c.nome], 0));
+  const dTot = r2(totale - reali.filter(nelTot).reduce((a,c) => a + s0[c.nome], 0));
+  // avvisi
+  const avvisi = [];
+  reali.forEach(c => { if (s1[c.nome] < 0) avvisi.push(`Saldo negativo su ${c.nome}: ${eur(s1[c.nome])}`); });
+  if ('MPS' in s1 && s1['MPS'] < RP.sogliaMPS) avvisi.push(`MPS sotto il cuscinetto: ${eur(s1['MPS'])} (soglia ${RP.sogliaMPS} €)`);
+  const da90 = addG(ieri, -90);
+  for (const m of movIeri) {
+    if (m.tipo !== 'spesa') continue;
+    if (!catInfo(m.categoria, m.sottocategoria, 'spesa')) avvisi.push(`Categoria mancante o sconosciuta: ${eur(+m.importo)} ${m.nota || ''}`.trim());
+    const st = movs.filter(x => x !== m && x.tipo === 'spesa' && x.categoria === m.categoria && (x.sottocategoria||'') === (m.sottocategoria||'')
+      && giorno(x) >= da90 && giorno(x) < ieri).map(x => +x.importo);
+    if (st.length >= 3 && +m.importo > 3 * mediana(st)) avvisi.push(`Importo insolito: ${eur(+m.importo)} in ${m.categoria} (mediana 90 gg ${eur(mediana(st))})`);
+  }
+  return { ieri, S:S0, P:P0, N, pend, cur, prev, pcum, fisseDopo, movIeri, spesi, s1, s0, reali, totale, dTot, avvisi };
+}
+
+function pillVs(a, b) {
+  if (b <= 0) return '<span class="rp-pill neu">nessun confronto</span>';
+  const p = (a - b) / b * 100;
+  if (Math.abs(p) < 1) return '<span class="rp-pill neu">= vs prec.</span>';
+  return `<span class="rp-pill ${p < 0 ? 'down' : 'up'}">${p < 0 ? '▼' : '▲'} ${Math.abs(p).toFixed(0)}% vs prec.</span>`;
+}
+
+function cardIeri() {
+  let R; try { R = riepilogo(); } catch (e) { return ''; }
+  const gg = parseD(R.ieri + ' 12:00:00').toLocaleDateString('it-IT', { weekday:'long', day:'numeric' });
+  const n = R.movIeri.length, tot = r2(R.cur.f + R.cur.v), ptot = r2(R.prev.f + R.prev.v);
+  return `<button class="card rp-card" id="rp-open"><div class="row"><div><div class="muted small">Riepilogo di ${esc(gg)}</div>
+    <div class="week-v">${eur(R.spesi)} <span class="muted">spesi · ${n} moviment${n === 1 ? 'o' : 'i'}</span></div></div>
+    ${R.avvisi.length ? `<span class="rp-badge">${svgIcon('lightbulb',16)}${R.avvisi.length}</span>` : svgIcon('chevron_right',22)}</div>
+    <div class="rp-line"><span>Periodo dal ${esc(ggMese(R.S))}</span><span class="rp-r"><b>${eur(tot)}</b>${pillVs(tot, ptot)}</span></div></button>`;
+}
+
+function svgCumulata(R) {
+  const W = 340, H = 150, pl = 34, pr = 8, pt = 12, pb = 20, w = W - pl - pr, h = H - pt - pb;
+  const cum = R.cur.cum, pc = R.pcum, xmax = Math.max(pc.length, R.N, 30);
+  const top = Math.max(1, ...cum, ...pc) * 1.08;
+  const step = [250, 500, 1000, 2500, 5000, 10000, 25000, 50000].find(s => top / s <= 2.2) || 50000;
+  const ymax = top <= step * 2 ? step * 2 : step * 3;
+  const X = d => pl + (d - 1) / (xmax - 1) * w, Y = v => pt + h - v / ymax * h;
+  const k = g => g === 0 ? '0' : g >= 1000 ? (g / 1000).toLocaleString('it-IT') + 'k' : String(g);
+  let s = `<svg class="rp-chart" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Spese cumulate del periodo">`;
+  for (let g = 0; g <= ymax; g += step) s += `<line x1="${pl}" x2="${W-pr}" y1="${Y(g).toFixed(1)}" y2="${Y(g).toFixed(1)}" class="rp-grid"/><text x="${pl-6}" y="${(Y(g)+3.5).toFixed(1)}" text-anchor="end">${k(g)}</text>`;
+  for (const d of [1, 8, 15, 22, xmax]) { const g = addG(R.S, d - 1); s += `<text x="${X(d).toFixed(1)}" y="${H-4}" text-anchor="middle">${+g.slice(8)}/${+g.slice(5,7)}</text>`; }
+  if (pc.length) s += `<polyline points="${pc.map((v,i) => `${X(i+1).toFixed(1)},${Y(v).toFixed(1)}`).join(' ')}" class="rp-prev"/>`;
+  const pts = cum.map((v,i) => `${X(i+1).toFixed(1)},${Y(v).toFixed(1)}`).join(' ');
+  s += `<polygon points="${X(1).toFixed(1)},${Y(0).toFixed(1)} ${pts} ${X(cum.length).toFixed(1)},${Y(0).toFixed(1)}" class="rp-area"/><polyline points="${pts}" class="rp-cur"/>`;
+  const cx = X(cum.length), cy = Y(cum[cum.length-1] || 0), dx = cx > W - 90;
+  s += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="4.5" class="rp-dot"/><text x="${(dx ? cx - 8 : cx + 8).toFixed(1)}" y="${(dx ? cy - 8 : cy + 4).toFixed(1)}" text-anchor="${dx ? 'end' : 'start'}" class="rp-lab">${eur(cum[cum.length-1] || 0)}</text>`;
+  return s + '</svg>';
+}
+
+function apriRiepilogo() {
+  const R = riepilogo();
+  const gg = s => parseD(s + ' 12:00:00').toLocaleDateString('it-IT', { weekday:'long', day:'numeric', month:'long' });
+  const tot = r2(R.cur.f + R.cur.v), ptot = r2(R.prev.f + R.prev.v);
+  let nota = '';
+  if (R.prev.f > 0 && Math.abs(R.cur.f - R.prev.f) / R.prev.f > 0.15) {
+    nota = `Le fisse dipendono dal calendario degli addebiti: confronto parziale, non necessariamente un ${R.cur.f > R.prev.f ? 'aumento' : 'calo'}.`;
+    if (R.fisseDopo > 0) nota += ` Nel periodo precedente, dopo il ${+R.pend.slice(8)}/${+R.pend.slice(5,7)}, arrivarono altre fisse per ${eur(R.fisseDopo)}.`;
+  }
+  const smax = Math.max(1, ...R.reali.map(c => R.s1[c.nome]));
+  const saldiH = R.reali.map(c => { const v = R.s1[c.nome], d = r2(v - R.s0[c.nome]);
+    return `<div class="rp-acc"><div><div>${esc(c.nome)}</div><div class="barwrap rp-bar"><div class="bar" style="width:${(Math.max(0, v) / smax * 100).toFixed(0)}%;background:${contoColor(c.nome)}"></div></div></div>
+      <div class="rp-accv"><div class="amt ${v < 0 ? 'neg' : ''}">${eur(v)}</div>${d ? `<div class="small ${d < 0 ? 'neg' : 'pos'}">${d > 0 ? '+' : ''}${eur(d)}</div>` : ''}</div></div>`; }).join('');
+  const avvH = R.avvisi.length ? R.avvisi.map(a => `<div class="hint warn">${svgIcon('lightbulb',18)}<span>${esc(a)}</span></div>`).join('')
+    : `<div class="hint ok">${svgIcon('check',18)}<span>Nessun avviso${'MPS' in R.s1 ? ` · MPS ${eur(R.s1['MPS'])}, sopra il cuscinetto` : ''}</span></div>`;
+  sheet(`<h2 class="wz-h">Riepilogo di ${esc(gg(R.ieri))}</h2>
+    <p class="muted" style="margin-top:-6px">${eur(R.spesi)} di consumi · ${R.movIeri.length} moviment${R.movIeri.length === 1 ? 'o' : 'i'}</p>
+    ${R.movIeri.length ? listaPerGiorno(R.movIeri) : '<p class="muted">Nessun movimento registrato ieri.</p>'}
+    <div class="set-sec">Periodo dal ${esc(ggMese(R.S))} · giorno ${R.N}</div>
+    <div class="card"><div class="rp-tot"><span class="amt">${eur(tot)}</span>${pillVs(tot, ptot)}</div>
+      ${svgCumulata(R)}
+      <div class="rp-legend"><span><i style="background:var(--accent)"></i>Periodo attuale</span><span><i class="dash"></i>${R.P ? `Dal ${esc(ggMese(R.P))}` : 'Nessun periodo precedente'}</span></div>
+      <div class="rp-fv"><div><div class="muted small">Fisse</div><div class="amt">${eur(R.cur.f)}</div>${pillVs(R.cur.f, R.prev.f)}</div>
+        <div><div class="muted small">Variabili</div><div class="amt">${eur(R.cur.v)}</div>${pillVs(R.cur.v, R.prev.v)}</div></div>
+      ${nota ? `<p class="muted small" style="margin:10px 0 0">${esc(nota)}</p>` : ''}
+      <p class="muted small" style="margin:8px 0 0">Spese di consumo confrontate con gli stessi ${R.N} giorni del periodo precedente.</p></div>
+    <div class="set-sec">Saldi a fine ${+R.ieri.slice(8)}/${+R.ieri.slice(5,7)}</div>
+    <div class="card list">${saldiH}<div class="rp-acc rp-totrow"><b>Totale</b><div class="rp-accv"><b class="amt">${eur(R.totale)}</b>${R.dTot ? `<div class="small ${R.dTot < 0 ? 'neg' : 'pos'}">${R.dTot > 0 ? '+' : ''}${eur(R.dTot)}</div>` : ''}</div></div></div>
+    <div class="set-sec">Avvisi</div>${avvH}`);
   bindVista();
 }
 
