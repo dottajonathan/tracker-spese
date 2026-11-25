@@ -1,7 +1,7 @@
 /* Tracker spese - PWA v1.2 */
 'use strict';
 
-const APP_VERSION = '1.7.1';
+const APP_VERSION = '1.7.2';
 const LS = { cfg: 'ts_cfg', cache: 'ts_cache', outbox: 'ts_outbox' };
 const TAG_PRESET = ['straordinaria', 'da rimborsare'];
 const DEFAULT_CONTO = 'Revolut Cointestato';
