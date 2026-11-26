@@ -1,7 +1,7 @@
 /* Tracker spese - PWA v1.2 */
 'use strict';
 
-const APP_VERSION = '1.9.0';
+const APP_VERSION = '1.9.1';
 const LS = { cfg: 'ts_cfg', cache: 'ts_cache', outbox: 'ts_outbox' };
 const TAG_PRESET = ['straordinaria', 'da rimborsare'];
 const DEFAULT_CONTO = 'Revolut Cointestato';
@@ -360,7 +360,16 @@ function apriConto(nome) {
     if (!isFinite(v)) return toast('Importo non valido');
     const diff = r2(v - s);
     if (diff === 0) { chiudi(); return toast('Saldo già allineato'); }
-    await salva({ tipo:'rettifica', importo:diff, conto:nome, data:nowStr(), nota:'Allineamento saldo', tag:'' });
+    const rettifica = () => salva({ tipo:'rettifica', importo:diff, conto:nome, data:nowStr(), nota:'Allineamento saldo', tag:'allinea' });
+    if (diff < 0) return rettifica();
+    // differenza positiva: può essere un'entrata vera (es. interessi del conto deposito), non un errore
+    sheet(`<h2 class="wz-h">${eur(diff)} in più su ${esc(nome)}</h2><p class="muted">Da cosa viene la differenza?</p>
+      <div class="card list">
+        <button class="set-row" id="al-int"><span>Interessi<br><span class="muted small">Entrata: Entrate Straordinarie → Interessi c/deposito</span></span>${svgIcon('savings',20)}</button>
+        <button class="set-row" id="al-ret"><span>Correzione<br><span class="muted small">Rettifica: errore o movimento non registrato</span></span>${svgIcon('tune',20)}</button>
+      </div>`);
+    $('#al-int').onclick = () => salva({ tipo:'entrata', importo:diff, conto:nome, data:nowStr(), categoria:'Entrate Straordinarie', sottocategoria:'Interessi c/deposito', nota:'Interessi c/deposito', tag:'allinea' });
+    $('#al-ret').onclick = rettifica;
   };
 }
 
@@ -400,7 +409,7 @@ const LS_SKIP = 'ts_skip';
 const getSkip = () => { try { return new Set(JSON.parse(localStorage.getItem(LS_SKIP)) || []); } catch { return new Set(); } };
 const setSkip = st => localStorage.setItem(LS_SKIP, JSON.stringify([...st]));
 const tagsDi = m => String(m.tag||'').split(',').map(t => t.trim()).filter(Boolean);
-const tagVisibili = t => String(t||'').split(',').map(x => x.trim()).filter(x => x && !x.startsWith('ric:') && !x.startsWith('rimb:')).join(', ');
+const tagVisibili = t => String(t||'').split(',').map(x => x.trim()).filter(x => x && x !== 'allinea' && !x.startsWith('ric:') && !x.startsWith('rimb:')).join(', ');
 const ultimoGiorno = (y, m) => new Date(y, m, 0).getDate();
 function scadenza(r, mk) { const [y, m] = mk.split('-').map(Number); return `${mk}-${pad(Math.min(r.g, ultimoGiorno(y, m)))}`; }
 // confermato = c'è il movimento col tag, oppure uno registrato a mano nello stesso mese con stesso conto,
@@ -777,7 +786,8 @@ const LS_VERIF = 'ts_verif', VERIF_DAL = '2026-11';
 const getVerif = () => { try { return JSON.parse(localStorage.getItem(LS_VERIF)) || {}; } catch { return {}; } };
 function verificato(conto, mk) {
   if ((getVerif()[mk] || {})[conto]) return true;
-  return tuttiMov().some(m => m.tipo === 'rettifica' && m.conto === conto && m.nota === 'Allineamento saldo' && m.data.slice(0,10) >= mk + '-16' && m.data.slice(0,7) === mk);
+  return tuttiMov().some(m => m.conto === conto && ((m.tipo === 'rettifica' && m.nota === 'Allineamento saldo') || tagsDi(m).includes('allinea'))
+    && m.data.slice(0,10) >= mk + '-16' && m.data.slice(0,7) === mk);
 }
 function cardVerifica() {
   const oggi = nowStr().slice(0,10), mk = oggi.slice(0,7);
