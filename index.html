@@ -6,7 +6,9 @@
 <meta name="theme-color" content="#F6F7FB" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0F1115" media="(prefers-color-scheme: dark)">
 <script>/* applica il tema prima del rendering, per evitare il lampo di colore */
-try { var t = localStorage.getItem('ts_theme'); if (t && t !== 'auto') document.documentElement.setAttribute('data-theme', t); } catch (e) {}</script>
+try { var t = localStorage.getItem('ts_theme'); if (t && t !== 'auto') document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+/* blocco con impronta: la schermata di blocco parte visibile, così il contenuto non appare nemmeno per un istante */
+try { if (localStorage.getItem('ts_lock')) document.documentElement.classList.add('locked'); } catch (e) {}</script>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>Spiccioli</title>
@@ -38,6 +40,13 @@ try { var t = localStorage.getItem('ts_theme'); if (t && t !== 'auto') document.
 
 <div id="sheet" class="hidden" role="dialog" aria-modal="true"><div id="sheet-body"></div></div>
 <div id="toast" class="hidden"></div>
+<div id="lock" role="dialog" aria-label="Spiccioli bloccato">
+  <div class="lk-ic" id="lk-ic"></div>
+  <div class="lk-t">Spiccioli è bloccato</div>
+  <div class="lk-s" id="lk-msg">Usa l'impronta per sbloccare</div>
+  <button class="btn" id="lk-go">Sblocca</button>
+  <button class="link hidden" id="lk-reset">Registra di nuovo l'impronta</button>
+</div>
 
 <script src="icons.js"></script>
 <script src="app.js"></script>

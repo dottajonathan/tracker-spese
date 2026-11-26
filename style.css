@@ -262,3 +262,18 @@ button.card.rp-card:active{transform:scale(.99)}
 .rp-totrow{border-top:2px solid var(--text)!important}
 .rp-ev{background:var(--accent-soft)!important;color:var(--text)!important;font-weight:600}
 .rp-ev .mi{color:var(--accent)}
+/* blocco con impronta */
+#lock{position:fixed;inset:0;z-index:1000;background:var(--bg);display:none;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:32px;text-align:center}
+html.locked #lock{display:flex}
+html.locked body{overflow:hidden}
+.lk-ic{width:84px;height:84px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;margin-bottom:8px}
+.lk-t{font-size:22px;font-weight:800}
+.lk-s{color:var(--muted);margin-bottom:14px;max-width:300px}
+#lock .btn{min-width:200px}
+.toggle{position:relative;width:48px;height:28px;flex:none}
+.toggle input{opacity:0;width:0;height:0}
+.toggle span{position:absolute;inset:0;border-radius:14px;background:var(--line);transition:.2s}
+.toggle span::after{content:"";position:absolute;width:22px;height:22px;left:3px;top:3px;border-radius:50%;background:#fff;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.toggle input:checked+span{background:var(--accent)}
+.toggle input:checked+span::after{transform:translateX(20px)}
+#lk-reset.hidden{display:none}

@@ -1,7 +1,7 @@
 /* Tracker spese - PWA v1.2 */
 'use strict';
 
-const APP_VERSION = '1.7.2';
+const APP_VERSION = '1.8.0';
 const LS = { cfg: 'ts_cfg', cache: 'ts_cache', outbox: 'ts_outbox' };
 const TAG_PRESET = ['straordinaria', 'da rimborsare'];
 const DEFAULT_CONTO = 'Revolut Cointestato';
@@ -711,6 +711,63 @@ function apriRiepilogo() {
   bindVista();
 }
 
+/* ---------------- blocco con impronta (WebAuthn, verifica sul dispositivo) ---------------- */
+// È un blocco dell'interfaccia: i dati in localStorage restano in chiaro. Nessun server verifica la firma:
+// basta che l'autenticatore del telefono confermi la persona (flag UV nei dati dell'autenticatore).
+const LOCK_KEY = 'ts_lock', LOCK_DOPO_MS = 5 * 60 * 1000;
+const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const unb64u = s => Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')), c => c.charCodeAt(0));
+const rnd = n => crypto.getRandomValues(new Uint8Array(n));
+const lockCfg = () => { try { return JSON.parse(localStorage.getItem(LOCK_KEY)); } catch { return null; } };
+const uvOk = authData => (new Uint8Array(authData)[32] & 0x04) !== 0;
+async function impraDisponibile() {
+  try { return !!(window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); } catch { return false; }
+}
+async function registraImpronta() {
+  const cred = await navigator.credentials.create({ publicKey: {
+    rp: { name: 'Spiccioli', id: location.hostname },
+    user: { id: rnd(16), name: 'spiccioli', displayName: 'Spiccioli' },
+    challenge: rnd(32),
+    pubKeyCredParams: [{ type:'public-key', alg:-7 }, { type:'public-key', alg:-257 }],
+    authenticatorSelection: { authenticatorAttachment:'platform', userVerification:'required', residentKey:'preferred' },
+    timeout: 60000, attestation: 'none' } });
+  localStorage.setItem(LOCK_KEY, JSON.stringify({ id: b64u(cred.rawId), dal: nowStr() }));
+}
+let sbloccoInCorso = false;
+async function sblocca() {
+  const cfg = lockCfg(); if (!cfg) return mostraBlocco(false);
+  if (sbloccoInCorso) return; sbloccoInCorso = true;
+  try {
+    const a = await navigator.credentials.get({ publicKey: { challenge: rnd(32), rpId: location.hostname,
+      allowCredentials: [{ type:'public-key', id: unb64u(cfg.id) }], userVerification:'required', timeout: 60000 } });
+    if (!uvOk(a.response.authenticatorData)) throw new Error('verifica non effettuata');
+    mostraBlocco(false);
+  } catch (e) {
+    $('#lk-msg').textContent = e.name === 'NotAllowedError' ? 'Annullato. Tocca Sblocca per riprovare.' : 'Impronta non riconosciuta (' + (e.message || e.name) + ').';
+    $('#lk-reset').classList.remove('hidden');
+  } finally { sbloccoInCorso = false; }
+}
+function mostraBlocco(on) {
+  document.documentElement.classList.toggle('locked', on);
+  if (on) { $('#lk-msg').textContent = "Usa l'impronta per sbloccare"; sblocca(); }
+}
+function initBlocco() {
+  $('#lk-ic').innerHTML = svgIcon('fingerprint', 44);
+  $('#lk-go').innerHTML = svgIcon('fingerprint', 20) + ' Sblocca'; $('#lk-go').onclick = sblocca;
+  // se la passkey è stata cancellata dal telefono, se ne registra una nuova: anche questo richiede l'impronta/PIN
+  $('#lk-reset').onclick = async () => {
+    try { await registraImpronta(); $('#lk-reset').classList.add('hidden'); mostraBlocco(false); toast('Impronta registrata di nuovo'); }
+    catch (e) { $('#lk-msg').textContent = 'Registrazione non riuscita: ' + (e.message || e.name); }
+  };
+  let nascostaDa = 0;
+  document.addEventListener('visibilitychange', () => {
+    if (!lockCfg()) return;
+    if (document.visibilityState === 'hidden') nascostaDa = Date.now();
+    else if (nascostaDa && Date.now() - nascostaDa > LOCK_DOPO_MS) mostraBlocco(true);
+  });
+  if (lockCfg()) mostraBlocco(true);
+}
+
 /* ---------------- impostazioni ---------------- */
 const TEMI = [['auto','Automatico','brightness_auto','linear-gradient(135deg,#F6F7FB 50%,#0F1115 50%)'],['light','Chiaro','light_mode','#F6F7FB'],
   ['dim','Medio','contrast','#2F3540'],['dark','Scuro','dark_mode','#0F1115']];
@@ -735,12 +792,34 @@ function apriImpostazioni() {
       <div class="set-row"><span>Versione</span><span class="muted">${APP_VERSION}</span></div>
       <div class="set-row"><span>Collegamento</span><span class="muted">${cfg ? 'configurato' : 'non configurato'}</span></div>
       <button class="set-row" id="set-sync" ><span>Ricarica i dati dal foglio</span>${svgIcon('sync',20)}</button>
+    </div>
+    <div class="set-sec">Sicurezza</div>
+    <div class="card list">
+      <div class="set-row"><span>Blocco con impronta<br><span class="muted small">All'apertura e dopo 5 minuti in background</span></span>
+        <label class="toggle"><input type="checkbox" id="set-lock" ${lockCfg() ? 'checked' : ''}><span></span></label></div>
     </div>`);
   document.querySelectorAll('[data-th]').forEach(b => b.onclick = () => {
     try { localStorage.setItem('ts_theme', b.dataset.th); } catch {}
     applicaTema(b.dataset.th); document.querySelectorAll('[data-th]').forEach(x => x.classList.toggle('on', x === b));
   });
   $('#set-sync').onclick = () => { chiudi(); caricaDati(); toast('Aggiornamento…'); };
+  $('#set-lock').onchange = async e => {
+    const cb = e.target;
+    if (cb.checked) {
+      if (!(await impraDisponibile())) { cb.checked = false; return toast('Impronta non disponibile su questo dispositivo', 4000); }
+      try { await registraImpronta(); toast('Blocco attivo ✓'); }
+      catch (err) { cb.checked = false; toast(err.name === 'NotAllowedError' ? 'Attivazione annullata' : 'Errore: ' + (err.message || err.name), 4000); }
+    } else {
+      // per disattivare serve comunque l'impronta, altrimenti chiunque con l'app aperta lo toglierebbe
+      try {
+        const c = lockCfg();
+        const a = await navigator.credentials.get({ publicKey: { challenge: rnd(32), rpId: location.hostname,
+          allowCredentials: [{ type:'public-key', id: unb64u(c.id) }], userVerification:'required', timeout: 60000 } });
+        if (!uvOk(a.response.authenticatorData)) throw new Error('verifica non effettuata');
+        localStorage.removeItem(LOCK_KEY); toast('Blocco disattivato');
+      } catch (err) { cb.checked = true; toast('Disattivazione annullata', 3000); }
+    }
+  };
 }
 
 // doppioni: stesso tipo, importo, giorno e categoria (o stessi conti per i trasferimenti)
@@ -1046,6 +1125,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 try { const c = JSON.parse(localStorage.getItem(LS.cache)); if (c) S = c; } catch {}
 render();
 applicaTema(temaAttuale());
+initBlocco();
 $('#btn-set').innerHTML = svgIcon('settings', 22); $('#btn-set').onclick = apriImpostazioni;
 if (getCfg()) caricaDati();
 if (getCfg() && new URLSearchParams(location.search).get('nuovo') === '1') { history.replaceState(null, '', location.pathname); apriForm(null); }
