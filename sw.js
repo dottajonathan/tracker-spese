@@ -1,5 +1,5 @@
 // Service worker: cache dell'app shell, rete per il backend
-const CACHE = 'spiccioli-v1.10.0';
+const CACHE = 'spiccioli-v1.10.1';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icons/icon2-192.png', 'icons/icon2-512.png', 'icons.js', 'icons/apple-touch-icon2.png'];
 
 self.addEventListener('install', e => {

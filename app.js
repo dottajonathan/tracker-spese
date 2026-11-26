@@ -1,7 +1,7 @@
 /* Tracker spese - PWA v1.2 */
 'use strict';
 
-const APP_VERSION = '1.10.0';
+const APP_VERSION = '1.10.1';
 const LS = { cfg: 'ts_cfg', cache: 'ts_cache', outbox: 'ts_outbox' };
 const TAG_PRESET = ['straordinaria', 'da rimborsare', 'da reintegrare'];
 const DEFAULT_CONTO = 'Revolut Cointestato';
@@ -376,7 +376,7 @@ function apriConto(nome) {
 
 
 /* ---------------- ricorrenti, controlli, settimana (v1.5) ---------------- */
-// Addebiti e spostamenti ricorrenti. g = giorno del mese (31 = ultimo giorno), dal = primo mese in cui vale (yyyy-mm).
+// Addebiti e spostamenti ricorrenti. g = giorno del mese (31 = ultimo giorno), dal = primo mese in cui vale (yyyy-mm), al = ultimo mese (facoltativo).
 // gruppo '16' = spostamenti automatici del 16 dal conto cointestato. Importi modificabili alla conferma.
 const RICORRENTI = [
   { id:'verisure',  g:3,  tipo:'spesa', importo:56.63,  conto:'MPS', categoria:'Utenze', sottocategoria:'Verisure', nota:'Verisure', dal:'2026-12' },
@@ -389,7 +389,9 @@ const RICORRENTI = [
   { id:'agos',      g:16, tipo:'spesa', importo:271.22, conto:'MPS', categoria:'Finanziamenti / Debiti', sottocategoria:'', nota:'Agos', dal:'2026-12' },
   { id:'allianz-casa', g:23, tipo:'spesa', importo:38.85, conto:'MPS', categoria:'Polizze', sottocategoria:'', nota:'Allianz Casa e Patrimonio', dal:'2026-12' },
   { id:'prestito-mps', g:27, tipo:'spesa', importo:445.03, conto:'MPS', categoria:'Finanziamenti / Debiti', sottocategoria:'', nota:'Prestito MPS', dal:'2026-11' },
-  { id:'iliad',     g:28, tipo:'spesa', importo:7.99,   conto:'MPS', categoria:'Utenze', sottocategoria:'Mobile', nota:'Iliad', dal:'2026-11' },
+  { id:'iliad',     g:28, tipo:'spesa', importo:7.99,   conto:'MPS', categoria:'Utenze', sottocategoria:'Mobile', nota:'Iliad', dal:'2026-11', al:'2026-11' }, // Sabri passa a TIM: ultimo addebito 28/11/2026
+  // TIM mobile di Sabri (dal 26/11/2026): dicembre gratis, 4,99 € da gennaio 2027. Giorno PROVVISORIO: correggere al primo addebito
+  { id:'tim-sabri', g:28, tipo:'spesa', importo:4.99,   conto:'MPS', categoria:'Utenze', sottocategoria:'Mobile', nota:'TIM mobile Sabri', dal:'2027-01' },
   { id:'allianz-premorienza', g:29, tipo:'spesa', importo:12.04, conto:'MPS', categoria:'Polizze', sottocategoria:'', nota:'Allianz premorienza', dal:'2026-12' },
   { id:'mutuo',     g:31, tipo:'spesa', importo:524.47, conto:'MPS', categoria:'Finanziamenti / Debiti', sottocategoria:'', nota:'Mutuo MPS', dal:'2026-11' },
   { id:'a16-scadenze',  g:16, gruppo:'16', tipo:'trasferimento', importo:300, conto:'Revolut Cointestato', conto_dest:'Scadenze', nota:'Automatismo del 16', dal:'2026-12' },
@@ -403,8 +405,8 @@ const RICORRENTI = [
   { id:'scalable',  g:19, tipo:'spesa', importo:100, conto:'Revolut Cointestato', categoria:'Risparmio e Investimenti', sottocategoria:'PAC', nota:'Scalable Capital', dal:'2026-12' }
 ];
 const VITA = { dal:'2026-11-16', budget:161, conto:'Revolut Cointestato', escludiCat:['Conto personale','Risparmio e Investimenti'] };
-// intervallo del controllo del 22 su MPS (decisione 38, aggiornata il 21/11/2026)
-const intervallo22 = mk => mk < '2026-12' ? [1664, 1714] : [1715, 1765];
+// intervallo del controllo del 22 su MPS (decisione 38, aggiornata il 26/11/2026: Iliad 7,99 → TIM 4,99)
+const intervallo22 = mk => mk < '2026-12' ? [1664, 1714] : [1712, 1762];
 
 const LS_SKIP = 'ts_skip';
 const getSkip = () => { try { return new Set(JSON.parse(localStorage.getItem(LS_SKIP)) || []); } catch { return new Set(); } };
@@ -429,7 +431,7 @@ function vociRicorrenti() {
   const tra5 = nowStr(new Date(Date.now() + 5*864e5)).slice(0,10);
   const skip = getSkip(), out = [];
   for (const mk of [mkPrima, mkOra]) for (const r of RICORRENTI) {
-    if (mk < r.dal || confermato(r, mk) || skip.has(`${r.id}|${mk}`)) continue;
+    if (mk < r.dal || (r.al && mk > r.al) || confermato(r, mk) || skip.has(`${r.id}|${mk}`)) continue;
     if (!contiAttivi().some(c => c.nome === r.conto)) continue;
     const sc = scadenza(r, mk);
     if (sc <= oggi) out.push({ r, mk, sc, stato:'scaduta' });
