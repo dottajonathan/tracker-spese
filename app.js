@@ -1,7 +1,7 @@
 /* Tracker spese - PWA v1.2 */
 'use strict';
 
-const APP_VERSION = '1.8.0';
+const APP_VERSION = '1.9.0';
 const LS = { cfg: 'ts_cfg', cache: 'ts_cache', outbox: 'ts_outbox' };
 const TAG_PRESET = ['straordinaria', 'da rimborsare'];
 const DEFAULT_CONTO = 'Revolut Cointestato';
@@ -177,7 +177,7 @@ function rigaMov(m) {
     : [m.nota ? (m.sottocategoria || m.categoria) : (m.sottocategoria ? m.categoria : ''), m.conto].filter(Boolean).join(' · ');
   const imp = m.tipo === 'spesa' ? -m.importo : +m.importo;
   const txt = m.tipo === 'trasferimento' ? eur(+m.importo) : (imp > 0 ? '+' : '') + eur(imp);
-  const tv = tagVisibili(m.tag); const tag = tv ? `<span class="pill">${esc(tv)}</span>` : (String(m.tag||'').includes('ric:') ? `<span class="pill">ricorrente</span>` : '');
+  const tv = tagVisibili(m.tag); const tag = tv ? `<span class="pill">${esc(tv)}</span>` : (String(m.tag||'').includes('rimb:') ? `<span class="pill">rimborso</span>` : String(m.tag||'').includes('ric:') ? `<span class="pill">ricorrente</span>` : '');
   return `<div class="mov ${m._pending?'pending':''}" data-id="${esc(m.id)}">
     ${bolla(def[0], def[1], 42)}
     <div class="bd"><div class="t1">${esc(t1)}</div><div class="t2">${esc(sub)}${tag}</div></div>
@@ -221,6 +221,8 @@ function vistaHome() {
   ${cardSettimana()}
   ${cardControlli()}
   ${cardRicorrenti()}
+  ${cardVerifica()}
+  ${cardRimborsi()}
   <div class="sec-h"><h2>Conti e Pocket</h2></div>
   <div class="accs">
   ${reali.map(c => { const col = contoColor(c.nome); return `<button class="acc-card" data-conto="${esc(c.nome)}" style="--c:${col}">
@@ -332,7 +334,7 @@ function bindVista() {
   });
   document.querySelectorAll('[data-conto]').forEach(el => el.onclick = () => apriConto(el.dataset.conto));
   const vt = $('#vedi-tutti'); if (vt) vt.onclick = () => { tab = 'movimenti'; render(); window.scrollTo(0,0); };
-  if (tab === 'home') { bindRicorrenti(); bindControlli(); const wk = $('#week'); if (wk) wk.onclick = apriSettimana; const rp = $('#rp-open'); if (rp) rp.onclick = apriRiepilogo; }
+  if (tab === 'home') { bindRicorrenti(); bindControlli(); bindVerifica(); bindRimborsi(); const wk = $('#week'); if (wk) wk.onclick = apriSettimana; const rp = $('#rp-open'); if (rp) rp.onclick = apriRiepilogo; }
   const fq = $('#f-q');
   if (fq) {
     fq.oninput = () => { filtro.q = fq.value; const pos = fq.selectionStart; render(); const n=$('#f-q'); n.focus(); n.setSelectionRange(pos,pos); };
@@ -398,7 +400,7 @@ const LS_SKIP = 'ts_skip';
 const getSkip = () => { try { return new Set(JSON.parse(localStorage.getItem(LS_SKIP)) || []); } catch { return new Set(); } };
 const setSkip = st => localStorage.setItem(LS_SKIP, JSON.stringify([...st]));
 const tagsDi = m => String(m.tag||'').split(',').map(t => t.trim()).filter(Boolean);
-const tagVisibili = t => String(t||'').split(',').map(x => x.trim()).filter(x => x && !x.startsWith('ric:')).join(', ');
+const tagVisibili = t => String(t||'').split(',').map(x => x.trim()).filter(x => x && !x.startsWith('ric:') && !x.startsWith('rimb:')).join(', ');
 const ultimoGiorno = (y, m) => new Date(y, m, 0).getDate();
 function scadenza(r, mk) { const [y, m] = mk.split('-').map(Number); return `${mk}-${pad(Math.min(r.g, ultimoGiorno(y, m)))}`; }
 // confermato = c'è il movimento col tag, oppure uno registrato a mano nello stesso mese con stesso conto,
@@ -466,7 +468,7 @@ async function confermaVoci(voci) {
   persistiCache(); setSync(''); toast(`${n} confermat${n===1?'o':'i'} ✓`); render();
 }
 function bindRicorrenti() {
-  document.querySelectorAll('.ric').forEach(el => {
+  document.querySelectorAll('.ric[data-ric]').forEach(el => {
     const v = trovaVoce(el.dataset.ric);
     el.querySelector('.ric-ok').onclick = () => confermaVoci([v]);
     el.querySelector('.ric-skip').onclick = () => { const st = getSkip(); st.add(`${v.r.id}|${v.mk}`); setSkip(st); toast('Saltato per questo mese'); render(); };
@@ -512,7 +514,7 @@ function lunedi(d) { const x = new Date(d); x.setHours(0,0,0,0); x.setDate(x.get
 function movVita(da, a) {
   const s0 = nowStr(da).slice(0,10), s1 = nowStr(a).slice(0,10);
   return tuttiMov().filter(m => m.tipo === 'spesa' && m.conto === VITA.conto && !VITA.escludiCat.includes(m.categoria)
-    && !tagsDi(m).some(t => /^ric:a16-/.test(t)) && m.data.slice(0,10) >= s0 && m.data.slice(0,10) < s1);
+    && !tagsDi(m).some(t => /^ric:a16-/.test(t) || t === 'da rimborsare') && m.data.slice(0,10) >= s0 && m.data.slice(0,10) < s1);
 }
 const spesaVita = (da, a) => r2(movVita(da, a).reduce((t,m) => t + +m.importo, 0));
 function settimana() {
@@ -541,7 +543,7 @@ function apriSettimana() {
   sheet(`<h2 class="wz-h">Vita quotidiana</h2>
     <p class="muted" style="margin-top:-6px">${f(w.da)} – ${f(fine)} · ${movs.length} spes${movs.length===1?'a':'e'} · ${eur(w.speso)} di ${eur(w.budget)}</p>
     ${movs.length ? listaPerGiorno(movs) : '<p class="muted">Nessuna spesa conteggiata questa settimana.</p>'}
-    <p class="muted small" style="margin-top:12px">Contano le spese del Revolut Cointestato. Esclusi: spostamenti del 16, conti personali, PAC e spese registrate sui Pocket.</p>`);
+    <p class="muted small" style="margin-top:12px">Contano le spese del Revolut Cointestato. Esclusi: spostamenti del 16, conti personali, PAC, spese da rimborsare e spese registrate sui Pocket.</p>`);
   bindVista();
 }
 
@@ -766,6 +768,73 @@ function initBlocco() {
     else if (nascostaDa && Date.now() - nascostaDa > LOCK_DOPO_MS) mostraBlocco(true);
   });
   if (lockCfg()) mostraBlocco(true);
+}
+
+/* ---------------- verifica saldi e rimborsi (v1.9) ---------------- */
+// Verifica saldi: dal 16 del mese (dopo gli spostamenti del 16) si conferma conto per conto che il saldo coincide con la banca.
+// "Coincide" resta sul telefono (ts_verif); un "Allinea" crea una rettifica nel foglio e vale come verifica.
+const LS_VERIF = 'ts_verif', VERIF_DAL = '2026-11';
+const getVerif = () => { try { return JSON.parse(localStorage.getItem(LS_VERIF)) || {}; } catch { return {}; } };
+function verificato(conto, mk) {
+  if ((getVerif()[mk] || {})[conto]) return true;
+  return tuttiMov().some(m => m.tipo === 'rettifica' && m.conto === conto && m.nota === 'Allineamento saldo' && m.data.slice(0,10) >= mk + '-16' && m.data.slice(0,7) === mk);
+}
+function cardVerifica() {
+  const oggi = nowStr().slice(0,10), mk = oggi.slice(0,7);
+  if (+oggi.slice(8,10) < 16 || mk < VERIF_DAL) return '';
+  if (RICORRENTI.some(r => r.gruppo === '16' && mk >= r.dal && !confermato(r, mk))) return '';
+  const s = saldi(), conti = contiReali().map(c => c.nome);
+  const daFare = conti.filter(n => !verificato(n, mk));
+  if (!daFare.length) return '';
+  return `<div class="sec-h"><h2>Verifica saldi</h2><span class="muted small">${conti.length - daFare.length}/${conti.length}</span></div>
+  <div class="card list">${daFare.map(n => `<div class="ric" data-vf="${esc(n)}">
+    <span class="acc-dot" style="background:${contoColor(n)}"></span>
+    <div class="bd"><span class="t1 wrap">${esc(n)}</span></div>
+    <span class="amt">${eur(s[n])}</span>
+    <button class="icon-btn sm vf-no" aria-label="Non coincide, allinea">${svgIcon('tune',18)}</button>
+    <button class="icon-btn sm ok vf-ok" aria-label="Coincide">${svgIcon('check',18)}</button></div>`).join('')}</div>
+  <p class="muted small" style="margin:4px 8px 0">Coincide con la banca? ✓ se sì, altrimenti il tasto a sinistra per allinearlo.</p>`;
+}
+function bindVerifica() {
+  const mk = nowStr().slice(0,7);
+  document.querySelectorAll('[data-vf]').forEach(el => {
+    const n = el.dataset.vf;
+    el.querySelector('.vf-ok').onclick = () => { const v = getVerif(); v[mk] = v[mk] || {}; v[mk][n] = nowStr(); localStorage.setItem(LS_VERIF, JSON.stringify(v)); render(); };
+    el.querySelector('.vf-no').onclick = () => apriConto(n);
+  });
+}
+
+// Rimborsi: spese con tag "da rimborsare" senza un'entrata collegata (tag rimb:<id spesa>).
+const RIMB_CAT = ['Entrate Straordinarie', 'Rimborsi'];
+function rimborsiAperti() {
+  const tutti = tuttiMov(), chiusi = new Set();
+  tutti.forEach(m => tagsDi(m).forEach(t => { if (t.startsWith('rimb:')) chiusi.add(t.slice(5)); }));
+  return tutti.filter(m => m.id && !m._pending && m.tipo === 'spesa' && tagsDi(m).includes('da rimborsare') && !chiusi.has(m.id)).sort((x,y) => x.data.localeCompare(y.data));
+}
+function cardRimborsi() {
+  const ap = rimborsiAperti(); if (!ap.length) return '';
+  const tot = r2(ap.reduce((t,m) => t + +m.importo, 0));
+  return `<div class="sec-h"><h2>Rimborsi da incassare</h2><span class="muted small">${eur(tot)}</span></div>
+  <div class="card list">${ap.map(m => { const d = catDef(m.categoria); const gg = Math.floor((Date.now() - parseD(m.data)) / 864e5);
+    return `<div class="ric" data-rb="${esc(m.id)}">${bolla(d[0], d[1], 38)}
+    <div class="bd"><span class="t1">${esc(m.nota || m.sottocategoria || m.categoria)}</span><span class="t2">${parseD(m.data).toLocaleDateString('it-IT',{day:'numeric',month:'short'})} · ${gg} gg fa</span></div>
+    <span class="amt">${eur(m.importo)}</span>
+    <button class="icon-btn sm rb-no" aria-label="Non arriverà">${svgIcon('close',18)}</button>
+    <button class="icon-btn sm ok rb-ok" aria-label="Incassato">${svgIcon('check',18)}</button></div>`; }).join('')}</div>
+  <p class="muted small" style="margin:4px 8px 0">✓ quando arriva il rimborso (puoi cambiare importo e conto). Per aggiungerne uno usa il tag "da rimborsare".</p>`;
+}
+function bindRimborsi() {
+  document.querySelectorAll('[data-rb]').forEach(el => {
+    const sp = tuttiMov().find(m => m.id === el.dataset.rb); if (!sp) return;
+    el.querySelector('.rb-ok').onclick = () => { apriForm(null); Object.assign(F, { tipo:'entrata', importoTxt:String(sp.importo).replace('.',','), conto:sp.conto, conto_dest:'',
+      categoria:RIMB_CAT[0], sottocategoria:RIMB_CAT[1], nota:'Rimborso ' + (sp.nota || sp.sottocategoria || sp.categoria), tag:'rimb:' + sp.id, step:'riepilogo', contoScelto:true, catScelta:true }); renderForm(); };
+    el.querySelector('.rb-no').onclick = () => {
+      sheet(`<h2 class="wz-h">Rimborso non in arrivo?</h2><p class="muted">"${esc(sp.nota || sp.categoria)}" (${eur(sp.importo)}) esce dall'elenco e resta una spesa normale.</p>
+        <div class="btns"><button class="btn sec" id="rn-no">Annulla</button><button class="btn" id="f-ok">Conferma</button></div>`);
+      $('#rn-no').onclick = chiudi;
+      $('#f-ok').onclick = () => salva({ ...sp, tag: tagsDi(sp).filter(t => t !== 'da rimborsare').join(', ') });
+    };
+  });
 }
 
 /* ---------------- impostazioni ---------------- */

@@ -277,3 +277,5 @@ html.locked body{overflow:hidden}
 .toggle input:checked+span{background:var(--accent)}
 .toggle input:checked+span::after{transform:translateX(20px)}
 #lk-reset.hidden{display:none}
+.acc-dot{width:14px;height:14px;border-radius:50%;flex:none;margin:0 12px 0 6px}
+.ric .t1.wrap{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
