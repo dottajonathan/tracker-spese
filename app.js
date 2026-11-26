@@ -1,9 +1,9 @@
 /* Tracker spese - PWA v1.2 */
 'use strict';
 
-const APP_VERSION = '1.9.1';
+const APP_VERSION = '1.10.0';
 const LS = { cfg: 'ts_cfg', cache: 'ts_cache', outbox: 'ts_outbox' };
-const TAG_PRESET = ['straordinaria', 'da rimborsare'];
+const TAG_PRESET = ['straordinaria', 'da rimborsare', 'da reintegrare'];
 const DEFAULT_CONTO = 'Revolut Cointestato';
 
 // icona Material Symbols + colore per categoria (colori presi dalle categorie Cashew)
@@ -177,7 +177,7 @@ function rigaMov(m) {
     : [m.nota ? (m.sottocategoria || m.categoria) : (m.sottocategoria ? m.categoria : ''), m.conto].filter(Boolean).join(' · ');
   const imp = m.tipo === 'spesa' ? -m.importo : +m.importo;
   const txt = m.tipo === 'trasferimento' ? eur(+m.importo) : (imp > 0 ? '+' : '') + eur(imp);
-  const tv = tagVisibili(m.tag); const tag = tv ? `<span class="pill">${esc(tv)}</span>` : (String(m.tag||'').includes('rimb:') ? `<span class="pill">rimborso</span>` : String(m.tag||'').includes('ric:') ? `<span class="pill">ricorrente</span>` : '');
+  const tv = tagVisibili(m.tag); const tag = tv ? `<span class="pill">${esc(tv)}</span>` : (String(m.tag||'').includes('reint:') ? `<span class="pill">reintegro</span>` : String(m.tag||'').includes('rimb:') ? `<span class="pill">rimborso</span>` : String(m.tag||'').includes('ric:') ? `<span class="pill">ricorrente</span>` : '');
   return `<div class="mov ${m._pending?'pending':''}" data-id="${esc(m.id)}">
     ${bolla(def[0], def[1], 42)}
     <div class="bd"><div class="t1">${esc(t1)}</div><div class="t2">${esc(sub)}${tag}</div></div>
@@ -223,6 +223,7 @@ function vistaHome() {
   ${cardRicorrenti()}
   ${cardVerifica()}
   ${cardRimborsi()}
+  ${cardAnticipi()}
   <div class="sec-h"><h2>Conti e Pocket</h2></div>
   <div class="accs">
   ${reali.map(c => { const col = contoColor(c.nome); return `<button class="acc-card" data-conto="${esc(c.nome)}" style="--c:${col}">
@@ -334,7 +335,7 @@ function bindVista() {
   });
   document.querySelectorAll('[data-conto]').forEach(el => el.onclick = () => apriConto(el.dataset.conto));
   const vt = $('#vedi-tutti'); if (vt) vt.onclick = () => { tab = 'movimenti'; render(); window.scrollTo(0,0); };
-  if (tab === 'home') { bindRicorrenti(); bindControlli(); bindVerifica(); bindRimborsi(); const wk = $('#week'); if (wk) wk.onclick = apriSettimana; const rp = $('#rp-open'); if (rp) rp.onclick = apriRiepilogo; }
+  if (tab === 'home') { bindRicorrenti(); bindControlli(); bindVerifica(); bindRimborsi(); bindAnticipi(); const wk = $('#week'); if (wk) wk.onclick = apriSettimana; const rp = $('#rp-open'); if (rp) rp.onclick = apriRiepilogo; }
   const fq = $('#f-q');
   if (fq) {
     fq.oninput = () => { filtro.q = fq.value; const pos = fq.selectionStart; render(); const n=$('#f-q'); n.focus(); n.setSelectionRange(pos,pos); };
@@ -409,7 +410,7 @@ const LS_SKIP = 'ts_skip';
 const getSkip = () => { try { return new Set(JSON.parse(localStorage.getItem(LS_SKIP)) || []); } catch { return new Set(); } };
 const setSkip = st => localStorage.setItem(LS_SKIP, JSON.stringify([...st]));
 const tagsDi = m => String(m.tag||'').split(',').map(t => t.trim()).filter(Boolean);
-const tagVisibili = t => String(t||'').split(',').map(x => x.trim()).filter(x => x && x !== 'allinea' && !x.startsWith('ric:') && !x.startsWith('rimb:')).join(', ');
+const tagVisibili = t => String(t||'').split(',').map(x => x.trim()).filter(x => x && x !== 'allinea' && !x.startsWith('ric:') && !x.startsWith('rimb:') && !x.startsWith('reint:')).join(', ');
 const ultimoGiorno = (y, m) => new Date(y, m, 0).getDate();
 function scadenza(r, mk) { const [y, m] = mk.split('-').map(Number); return `${mk}-${pad(Math.min(r.g, ultimoGiorno(y, m)))}`; }
 // confermato = c'è il movimento col tag, oppure uno registrato a mano nello stesso mese con stesso conto,
@@ -844,6 +845,34 @@ function bindRimborsi() {
       $('#rn-no').onclick = chiudi;
       $('#f-ok').onclick = () => salva({ ...sp, tag: tagsDi(sp).filter(t => t !== 'da rimborsare').join(', ') });
     };
+  });
+}
+
+// Anticipi da reintegrare: spese pagate da un Pocket "in prestito" (tag "da reintegrare"), da restituire con la 13ª
+// (decisione 31: regali di Natale anticipati da Casa & Respiro, restituiti il 22 dicembre con la quota della 13ª per i regali).
+const REINTEGRO = { mmdd: '12-22', etichetta: '22 dicembre, con la 13ª' };
+function anticipiAperti() {
+  const tutti = tuttiMov(), chiusi = new Set();
+  tutti.forEach(m => tagsDi(m).forEach(t => { if (t.startsWith('reint:')) t.slice(6).split('+').forEach(id => chiusi.add(id)); }));
+  return tutti.filter(m => m.id && !m._pending && m.tipo === 'spesa' && tagsDi(m).includes('da reintegrare') && !chiusi.has(m.id));
+}
+function cardAnticipi() {
+  const ap = anticipiAperti(); if (!ap.length) return '';
+  const tot = r2(ap.reduce((t,m) => t + +m.importo, 0)), oggi = nowStr().slice(5,10), ora = oggi >= REINTEGRO.mmdd;
+  const perConto = {}; ap.forEach(m => perConto[m.conto] = r2((perConto[m.conto] || 0) + +m.importo));
+  const conti = Object.keys(perConto);
+  return `<div class="sec-h"><h2>Da reintegrare</h2><span class="muted small">${eur(tot)}</span></div>
+  <div class="card ${ora ? 'rint-on' : ''}" style="padding:14px 16px">
+    <div class="muted small">${ora ? 'È il momento: reintegra con la 13ª' : 'Promemoria per il ' + REINTEGRO.etichetta}</div>
+    ${ap.map(m => `<div class="sum-row"><span>${esc(m.nota || m.categoria)} <span class="muted small">· ${esc(m.conto)}</span></span><span class="sum-v">${eur(m.importo)}</span></div>`).join('')}
+    ${ora ? conti.map(c => `<button class="btn" style="margin-top:12px;width:100%" data-rint="${esc(c)}">Reintegra ${eur(perConto[c])} su ${esc(c)}</button>`).join('') : ''}
+  </div>`;
+}
+function bindAnticipi() {
+  document.querySelectorAll('[data-rint]').forEach(b => b.onclick = () => {
+    const c = b.dataset.rint, ap = anticipiAperti().filter(m => m.conto === c), tot = r2(ap.reduce((t,m) => t + +m.importo, 0));
+    apriForm(null); Object.assign(F, { tipo:'trasferimento', importoTxt:String(tot).replace('.',','), conto:'Revolut Cointestato', conto_dest:c,
+      nota:'Reintegro anticipo: ' + ap.map(m => m.nota || m.categoria).join(', '), tag:'reint:' + ap.map(m => m.id).join('+'), step:'riepilogo' }); renderForm();
   });
 }
 
