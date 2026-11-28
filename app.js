@@ -1,7 +1,7 @@
 /* Tracker spese - PWA v1.2 */
 'use strict';
 
-const APP_VERSION = '1.11.0';
+const APP_VERSION = '1.11.1';
 const LS = { cfg: 'ts_cfg', cache: 'ts_cache', outbox: 'ts_outbox' };
 const TAG_PRESET = ['straordinaria', 'da rimborsare', 'da reintegrare'];
 const DEFAULT_CONTO = 'Revolut Cointestato';
@@ -161,7 +161,7 @@ function bindSetup() {
     const url = $('#cfg-url').value.trim(), token = $('#cfg-token').value.trim();
     if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(url)) return toast('URL non valido');
     if (!token) return toast('Token mancante');
-    localStorage.setItem(LS.cfg, JSON.stringify({ url, token }));
+    localStorage.setItem(LS.cfg, JSON.stringify({ url, token })); chiediPersistenza();
     try { await api('ping'); toast('Collegato ✓'); caricaDati(); }
     catch (e) { localStorage.removeItem(LS.cfg); toast('Errore: ' + e.message, 4000); }
   };
@@ -926,6 +926,7 @@ function apriImpostazioni() {
     <div class="card list">
       <div class="set-row"><span>Versione</span><span class="muted">${APP_VERSION}</span></div>
       <div class="set-row"><span>Collegamento</span><span class="muted">${cfg ? 'configurato' : 'non configurato'}</span></div>
+      <div class="set-row"><span>Memoria permanente<br><span class="muted small">Se è "no", Chrome può cancellare i dati dell'app</span></span><span class="muted" id="set-persist">…</span></div>
       <button class="set-row" id="set-sync" ><span>Ricarica i dati dal foglio</span>${svgIcon('sync',20)}</button>
     </div>
     <div class="set-sec">Sicurezza</div>
@@ -937,6 +938,8 @@ function apriImpostazioni() {
     try { localStorage.setItem('ts_theme', b.dataset.th); } catch {}
     applicaTema(b.dataset.th); document.querySelectorAll('[data-th]').forEach(x => x.classList.toggle('on', x === b));
   });
+  (async () => { const el = $('#set-persist'); if (!el) return;
+    try { el.textContent = navigator.storage && await navigator.storage.persisted() ? 'sì' : 'no'; } catch { el.textContent = 'n/d'; } })();
   $('#set-sync').onclick = () => { chiudi(); caricaDati(); toast('Aggiornamento…'); };
   $('#set-lock').onchange = async e => {
     const cb = e.target;
@@ -1263,6 +1266,12 @@ try { const c = JSON.parse(localStorage.getItem(LS.cache)); if (c) S = c; } catc
 render();
 applicaTema(temaAttuale());
 initBlocco();
+// chiede a Chrome di non cancellare i dati dell'app (URL, token, cache, movimenti in attesa) quando manca spazio.
+// Su Chrome non compare nessuna richiesta: decide il browser (web.dev/articles/persistent-storage).
+async function chiediPersistenza() {
+  try { if (navigator.storage && navigator.storage.persist && !(await navigator.storage.persisted())) await navigator.storage.persist(); } catch {}
+}
+if (getCfg()) chiediPersistenza();
 $('#btn-set').innerHTML = svgIcon('settings', 22); $('#btn-set').onclick = apriImpostazioni;
 if (getCfg()) caricaDati();
 if (getCfg() && new URLSearchParams(location.search).get('nuovo') === '1') { history.replaceState(null, '', location.pathname); apriForm(null); }
