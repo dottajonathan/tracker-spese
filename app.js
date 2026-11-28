@@ -1,7 +1,7 @@
 /* Tracker spese - PWA v1.2 */
 'use strict';
 
-const APP_VERSION = '1.10.1';
+const APP_VERSION = '1.11.0';
 const LS = { cfg: 'ts_cfg', cache: 'ts_cache', outbox: 'ts_outbox' };
 const TAG_PRESET = ['straordinaria', 'da rimborsare', 'da reintegrare'];
 const DEFAULT_CONTO = 'Revolut Cointestato';
@@ -219,6 +219,7 @@ function vistaHome() {
   </section>
   ${cardIeri()}
   ${cardSettimana()}
+  ${cardOnline()}
   ${cardControlli()}
   ${cardRicorrenti()}
   ${cardVerifica()}
@@ -404,7 +405,11 @@ const RICORRENTI = [
   { id:'a16-sabri',     g:16, gruppo:'16', tipo:'spesa', importo:250, conto:'Revolut Cointestato', categoria:'Conto personale', sottocategoria:'Sabri', nota:'Conto personale Sabri', dal:'2026-12' },
   { id:'scalable',  g:19, tipo:'spesa', importo:100, conto:'Revolut Cointestato', categoria:'Risparmio e Investimenti', sottocategoria:'PAC', nota:'Scalable Capital', dal:'2026-12' }
 ];
-const VITA = { dal:'2026-11-16', budget:161, conto:'Revolut Cointestato', escludiCat:['Conto personale','Risparmio e Investimenti'] };
+// Vita quotidiana divisa (28/11/2026): ordini di spesa online a parte (300 €/mese contabile), il resto 400 €/ciclo ≈ 92 €/settimana.
+// La regola del recupero conta solo dalla settimana del 23/11, la prima con la divisione.
+const VITA = { dal:'2026-11-23', budget:92, conto:'Revolut Cointestato', escludiCat:['Conto personale','Risparmio e Investimenti'] };
+const ONLINE = { budget:300, giornoInizio:15 };
+const isOrdineOnline = m => m.tipo === 'spesa' && m.categoria === 'Spesa' && (m.sottocategoria === 'Spesa online' || /esselunga\s*online/i.test(m.nota || ''));
 // intervallo del controllo del 22 su MPS (decisione 38, aggiornata il 26/11/2026: Iliad 7,99 → TIM 4,99)
 const intervallo22 = mk => mk < '2026-12' ? [1664, 1714] : [1712, 1762];
 
@@ -525,7 +530,7 @@ function bindControlli() {
 function lunedi(d) { const x = new Date(d); x.setHours(0,0,0,0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; }
 function movVita(da, a) {
   const s0 = nowStr(da).slice(0,10), s1 = nowStr(a).slice(0,10);
-  return tuttiMov().filter(m => m.tipo === 'spesa' && m.conto === VITA.conto && !VITA.escludiCat.includes(m.categoria)
+  return tuttiMov().filter(m => m.tipo === 'spesa' && m.conto === VITA.conto && !VITA.escludiCat.includes(m.categoria) && !isOrdineOnline(m)
     && !tagsDi(m).some(t => /^ric:a16-/.test(t) || t === 'da rimborsare') && m.data.slice(0,10) >= s0 && m.data.slice(0,10) < s1);
 }
 const spesaVita = (da, a) => r2(movVita(da, a).reduce((t,m) => t + +m.importo, 0));
@@ -541,11 +546,31 @@ function settimana() {
 function cardSettimana() {
   const w = settimana(), pct = w.budget > 0 ? Math.min(100, w.speso / w.budget * 100) : 100;
   const col = w.resto < 0 ? 'var(--neg)' : pct > 80 ? 'var(--warn)' : 'var(--pos)';
-  return `<button class="card week" id="week"><div class="row"><div><div class="muted small">Vita quotidiana · questa settimana</div>
+  return `<button class="card week" id="week"><div class="row"><div><div class="muted small">Vita quotidiana · settimana</div>
     <div class="week-v">${eur(w.speso)} <span class="muted">di ${eur(w.budget)}</span></div></div>
     <div class="week-r" style="color:${col}">${w.resto >= 0 ? 'restano' : 'sforati'}<b>${eur(Math.abs(w.resto))}</b></div></div>
     <div class="barwrap big"><div class="bar" style="width:${pct.toFixed(1)}%;background:${col}"></div></div>
     ${w.recupero ? `<div class="muted small" style="margin-top:6px">Budget ridotto di ${eur(w.recupero)} per recuperare le settimane precedenti</div>` : ''}</button>`;
+}
+
+// ordini di spesa online nel mese contabile (dal 15 al 14, come il profilo della spesa)
+function meseOnline() {
+  const d = new Date(); const ini = new Date(d.getFullYear(), d.getMonth() - (d.getDate() < ONLINE.giornoInizio ? 1 : 0), ONLINE.giornoInizio);
+  const fin = new Date(ini.getFullYear(), ini.getMonth() + 1, ONLINE.giornoInizio);
+  const s0 = nowStr(ini).slice(0,10), s1 = nowStr(fin).slice(0,10);
+  const ordini = tuttiMov().filter(m => isOrdineOnline(m) && m.data.slice(0,10) >= s0 && m.data.slice(0,10) < s1).sort((x,y) => x.data.localeCompare(y.data));
+  const speso = r2(ordini.reduce((t,m) => t + +m.importo, 0));
+  return { ordini, speso, resto: r2(ONLINE.budget - speso), ini, fin };
+}
+function cardOnline() {
+  const o = meseOnline(), pct = Math.min(100, o.speso / ONLINE.budget * 100);
+  const col = o.resto < 0 ? 'var(--neg)' : pct > 85 ? 'var(--warn)' : 'var(--pos)';
+  const f = d => d.toLocaleDateString('it-IT', { day:'numeric', month:'short' }), fine = new Date(o.fin); fine.setDate(fine.getDate() - 1);
+  return `<div class="card week"><div class="row"><div><div class="muted small">Spesa online · ${f(o.ini)} – ${f(fine)}</div>
+    <div class="week-v">${eur(o.speso)} <span class="muted">di ${eur(ONLINE.budget)}</span></div></div>
+    <div class="week-r" style="color:${col}">${o.resto >= 0 ? 'restano' : 'sforati'}<b>${eur(Math.abs(o.resto))}</b></div></div>
+    <div class="barwrap big"><div class="bar" style="width:${pct.toFixed(1)}%;background:${col}"></div></div>
+    <div class="muted small" style="margin-top:6px">${o.ordini.length ? o.ordini.map(m => `${parseD(m.data).toLocaleDateString('it-IT',{day:'numeric',month:'short'})}: ${eur(m.importo)}`).join(' · ') : 'Nessun ordine in questo mese'}</div></div>`;
 }
 
 function apriSettimana() {
@@ -555,7 +580,7 @@ function apriSettimana() {
   sheet(`<h2 class="wz-h">Vita quotidiana</h2>
     <p class="muted" style="margin-top:-6px">${f(w.da)} – ${f(fine)} · ${movs.length} spes${movs.length===1?'a':'e'} · ${eur(w.speso)} di ${eur(w.budget)}</p>
     ${movs.length ? listaPerGiorno(movs) : '<p class="muted">Nessuna spesa conteggiata questa settimana.</p>'}
-    <p class="muted small" style="margin-top:12px">Contano le spese del Revolut Cointestato. Esclusi: spostamenti del 16, conti personali, PAC, spese da rimborsare e spese registrate sui Pocket.</p>`);
+    <p class="muted small" style="margin-top:12px">Contano le spese del Revolut Cointestato. Esclusi: ordini di spesa online (hanno il loro budget), spostamenti del 16, conti personali, PAC, spese da rimborsare e spese registrate sui Pocket.</p>`);
   bindVista();
 }
 
@@ -1002,7 +1027,9 @@ function suggerisci(tipo, nota) {
     return { k, e, score: score ? score + Math.min(e.n, 20) : 0 };
   }).filter(v => v.score).sort((a,b) => b.score - a.score || b.e.last.localeCompare(a.e.last));
   const best = voci[0];
-  const cat = best && best.score >= 25 ? { ...topCat(best.e), da: best.e.nota, esatta: best.k === q } : null;
+  let cat = best && best.score >= 25 ? { ...topCat(best.e), da: best.e.nota, esatta: best.k === q } : null;
+  // gli ordini online hanno una sottocategoria propria (budget a parte), anche se lo storico li ha come Supermercati
+  if (tipo === 'spesa' && /esselunga\s*online/i.test(nota)) cat = { cat:'Spesa', sub:'Spesa online', n:1, quota:1, da:nota, esatta:true };
   return { lista: voci.slice(0, 5), cat };
 }
 
